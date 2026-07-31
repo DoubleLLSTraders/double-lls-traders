@@ -20,8 +20,10 @@ import {
 } from "../lib/auth/totpRemote";
 import { grantLiveAccess, LIVE_ACCESS_TTL_MS, type TotpRecord } from "../lib/auth/store";
 import { config, type AccountKind } from "../lib/config";
+import type { ConnectionState } from "../lib/deriv/types";
 import { listAccounts } from "../lib/deriv/rest";
 import type { OptionsAccount } from "../lib/deriv/types";
+import { SystemStatusPanel } from "./SystemStatusPanel";
 
 interface SettingsModalProps {
   open: boolean;
@@ -30,9 +32,11 @@ interface SettingsModalProps {
   botRunning: boolean;
   /** Which tab to show when the modal opens. */
   initialTab?: SettingsTab;
+  feedState: ConnectionState;
+  feedError: string | null;
 }
 
-export type SettingsTab = "profile" | "security" | "trading";
+export type SettingsTab = "profile" | "security" | "trading" | "status";
 
 function formatDateTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -55,7 +59,14 @@ function maskToken(token: string): string {
   return `${token.slice(0, 4)}••••${token.slice(-4)}`;
 }
 
-export function SettingsModal({ open, onClose, botRunning, initialTab = "profile" }: SettingsModalProps) {
+export function SettingsModal({
+  open,
+  onClose,
+  botRunning,
+  initialTab = "profile",
+  feedState,
+  feedError,
+}: SettingsModalProps) {
   const active = getAccountKind();
   const auth = useAppAuth();
   const [tab, setTab] = useState<SettingsTab>("profile");
@@ -180,7 +191,7 @@ export function SettingsModal({ open, onClose, botRunning, initialTab = "profile
     <div className="modal" role="dialog" aria-modal="true" aria-label="Settings">
       <button type="button" className="modal__scrim" aria-label="Close settings" onClick={onClose} />
 
-      <div className="modal__card settings-modal">
+      <div className={`modal__card settings-modal ${tab === "status" ? "settings-modal--wide" : ""}`}>
         <header className="modal__head">
           <h2>Settings</h2>
           <button type="button" className="modal__close" onClick={onClose} aria-label="Close">
@@ -210,6 +221,13 @@ export function SettingsModal({ open, onClose, botRunning, initialTab = "profile
               onClick={() => setTab("trading")}
             >
               Trading
+            </button>
+            <button
+              type="button"
+              className={`settings-modal__nav-btn ${tab === "status" ? "is-active" : ""}`}
+              onClick={() => setTab("status")}
+            >
+              Status
             </button>
           </nav>
 
@@ -253,6 +271,14 @@ export function SettingsModal({ open, onClose, botRunning, initialTab = "profile
                 onConfirmLiveSwitch={confirmLiveSwitch}
                 email={auth.session?.email ?? null}
                 totpRecord={totpRecord}
+              />
+            ) : null}
+
+            {tab === "status" ? (
+              <SystemStatusPanel
+                feedState={feedState}
+                feedError={feedError}
+                email={auth.session?.email ?? null}
               />
             ) : null}
           </div>

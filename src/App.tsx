@@ -879,6 +879,8 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         botRunning={bot.running || paper.settling}
         initialTab={settingsTab}
+        feedState={feed.state}
+        feedError={feed.error}
       />
       <header className="topbar">
         <BrandMark />
