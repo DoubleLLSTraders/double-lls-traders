@@ -7,13 +7,14 @@ import { DigitStrip } from "./components/DigitStrip";
 import { MarketSelect } from "./components/MarketSelect";
 import { StatsPanel } from "./components/StatsPanel";
 import { BrandStamp } from "./components/BrandStamp";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
 import { StatusBar } from "./components/StatusBar";
 import { TickChart } from "./components/TickChart";
 import { AiPanel } from "./components/AiPanel";
 import { AuthSignOutButton } from "./components/AuthGate";
 import { LiveTradingBanner } from "./components/LiveTradingBanner";
 import { TradesPanel } from "./components/TradesPanel";
+import { useAppAuth } from "./context/AuthContext";
 import { recoveryRequirements } from "./lib/bot/gates";
 import { isLowPayoutSymbol } from "./lib/bot/performance";
 import { useArmTimer } from "./hooks/useArmTimer";
@@ -242,6 +243,8 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [menu, setMenu] = useState<AppMenu>("market");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("profile");
+  const auth = useAppAuth();
   const [symbol, setSymbol] = useState(() =>
     isLowPayoutSymbol(config.symbol) ? DIFFERS_FAST_SYMBOL : config.symbol,
   );
@@ -875,6 +878,7 @@ export default function App() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         botRunning={bot.running || paper.settling}
+        initialTab={settingsTab}
       />
       <header className="topbar">
         <BrandMark />
@@ -912,6 +916,29 @@ export default function App() {
             AI
             {aiOperator.state.armed ? <em className="topbar__count">ON</em> : null}
           </button>
+          <button
+            type="button"
+            className={`topbar__nav-settings ${settingsOpen ? "is-active" : ""}`}
+            aria-label="Account and settings"
+            onClick={() => {
+              setSettingsTab("profile");
+              setSettingsOpen(true);
+            }}
+          >
+            {auth.session?.picture ? (
+              <img
+                className="topbar__nav-avatar"
+                src={auth.session.picture}
+                alt=""
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <span className="topbar__nav-avatar topbar__nav-avatar--fallback" aria-hidden>
+                {(auth.session?.name ?? "U").slice(0, 1).toUpperCase()}
+              </span>
+            )}
+            Settings
+          </button>
         </nav>
 
         <div className="topbar__right">
@@ -936,8 +963,11 @@ export default function App() {
           <button
             type="button"
             className="topbar__theme"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Open settings"
+            onClick={() => {
+              setSettingsTab("trading");
+              setSettingsOpen(true);
+            }}
+            aria-label="Open account settings"
           >
             {feed.account?.isVirtual === false ? "Live" : "Demo"}
           </button>

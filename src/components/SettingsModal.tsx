@@ -28,9 +28,11 @@ interface SettingsModalProps {
   onClose: () => void;
   /** True while the bot holds a position, which must not be switched mid-trade. */
   botRunning: boolean;
+  /** Which tab to show when the modal opens. */
+  initialTab?: SettingsTab;
 }
 
-type SettingsTab = "profile" | "security" | "trading";
+export type SettingsTab = "profile" | "security" | "trading";
 
 function formatDateTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -53,7 +55,7 @@ function maskToken(token: string): string {
   return `${token.slice(0, 4)}••••${token.slice(-4)}`;
 }
 
-export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, botRunning, initialTab = "profile" }: SettingsModalProps) {
   const active = getAccountKind();
   const auth = useAppAuth();
   const [tab, setTab] = useState<SettingsTab>("profile");
@@ -68,14 +70,15 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
   useEffect(() => {
     if (!open) {
       setAcknowledged(false);
-      setTab("profile");
       setLiveVerifyOpen(false);
       return;
     }
 
+    setTab(initialTab);
+
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
-  }, [open]);
+  }, [open, initialTab]);
 
   useEffect(() => {
     if (!open) return;
