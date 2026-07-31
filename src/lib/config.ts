@@ -10,11 +10,20 @@ export interface RiskLimits {
   maxTradesPerDay: number;
 }
 
+export interface AccountCredentials {
+  token: string;
+  accountId: string;
+}
+
 export interface AppConfig {
   appId: string;
-  wsUrl: string;
+  restUrl: string;
+  /** Account selected by .env. The settings modal can override this at runtime. */
   account: AccountKind;
+  accountId: string;
   token: string;
+  /** Credentials for both accounts, so the switcher does not need a reload. */
+  accounts: Record<AccountKind, AccountCredentials>;
   mode: TradingMode;
   symbol: string;
   risk: RiskLimits;
@@ -24,8 +33,8 @@ export interface AppConfig {
   warnings: string[];
 }
 
-const DEFAULT_WS_URL = "wss://ws.derivws.com/websockets/v3";
-const DEFAULT_SYMBOL = "R_100";
+const DEFAULT_REST_URL = "https://api.derivws.com";
+const DEFAULT_SYMBOL = "R_75";
 
 function num(raw: string | undefined, fallback: number): number {
   const parsed = Number(raw);
@@ -39,24 +48,42 @@ function readConfig(): AppConfig {
 
   const appId = (env.VITE_DERIV_APP_ID ?? "").trim();
   if (!appId) {
-    errors.push("VITE_DERIV_APP_ID is empty. Register an app on the Deriv developer portal and paste the app_id into .env.");
+    errors.push("VITE_DERIV_APP_ID is empty. Paste your Brick Trader app id into .env.");
   }
 
   const account: AccountKind = env.VITE_DERIV_ACCOUNT?.trim() === "real" ? "real" : "demo";
   const demoToken = (env.VITE_DERIV_TOKEN_DEMO ?? "").trim();
-  const realToken = (env.VITE_DERIV_TOKEN_REAL ?? "").trim();
-  const token = account === "real" ? realToken : demoToken;
+  // A Deriv personal access token reaches every account on the profile, so the
+  // demo token is a valid fallback for the real account when no separate one
+  // is configured. Verified with scripts/check-accounts.ts.
+  const realToken = (env.VITE_DERIV_TOKEN_REAL ?? "").trim() || demoToken;
 
-  if (!token) {
+  const accounts: Record<AccountKind, AccountCredentials> = {
+    demo: { token: demoToken, accountId: (env.VITE_DERIV_DEMO_ACCOUNT_ID ?? "").trim() },
+    real: { token: realToken, accountId: (env.VITE_DERIV_REAL_ACCOUNT_ID ?? "").trim() },
+  };
+  const { token, accountId } = accounts[account];
+
+  if (!demoToken && !realToken) {
+    errors.push(
+      "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
+    );
+  } else if (!token) {
     errors.push(
       account === "real"
         ? "VITE_DERIV_TOKEN_REAL is empty while VITE_DERIV_ACCOUNT=real."
-        : "VITE_DERIV_TOKEN_DEMO is empty. Create a token with Read + Trade scopes on your virtual account.",
+        : "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
     );
   }
 
-  // `live` only takes effect once execution is wired up, but surface the
-  // combination early — trading real money is never meant to happen silently.
+  if (!accountId) {
+    warnings.push(
+      account === "real"
+        ? "VITE_DERIV_REAL_ACCOUNT_ID is empty — the app will pick the first real account it finds."
+        : "VITE_DERIV_DEMO_ACCOUNT_ID is empty — the app will pick the first demo account it finds.",
+    );
+  }
+
   const mode: TradingMode = env.VITE_TRADING_MODE?.trim() === "live" ? "live" : "paper";
   if (mode === "live" && account === "real") {
     warnings.push("Live mode on a REAL account: orders placed will use real money.");
@@ -80,9 +107,11 @@ function readConfig(): AppConfig {
 
   return {
     appId,
-    wsUrl: (env.VITE_DERIV_WS_URL ?? "").trim() || DEFAULT_WS_URL,
+    restUrl: (env.VITE_DERIV_REST_URL ?? "").trim().replace(/\/$/, "") || DEFAULT_REST_URL,
     account,
+    accountId,
     token,
+    accounts,
     mode,
     symbol: (env.VITE_DEFAULT_SYMBOL ?? "").trim() || DEFAULT_SYMBOL,
     risk,

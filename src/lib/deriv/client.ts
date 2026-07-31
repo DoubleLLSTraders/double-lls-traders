@@ -1,14 +1,16 @@
+import { requestSocketUrl } from "./rest";
 import type {
-  AuthorizeResponse,
   BaseResponse,
   ConnectionState,
   DerivError,
+  OptionsAccount,
 } from "./types";
 
 export interface DerivClientOptions {
   appId: string;
-  wsUrl: string;
+  restUrl: string;
   token: string;
+  accountId: string;
   /** Fail a pending request if Deriv has not answered within this many ms. */
   requestTimeoutMs?: number;
 }
@@ -41,9 +43,11 @@ const HEARTBEAT_MS = 30_000;
 const MAX_BACKOFF_MS = 30_000;
 
 /**
- * Thin WebSocket wrapper around the Deriv API: correlates requests with
- * responses via `req_id`, keeps subscriptions alive across reconnects, and
- * pings often enough that Deriv does not drop an idle socket.
+ * Options WebSocket client for Deriv's new PAT + OTP flow.
+ *
+ * Auth happens outside the socket: REST mints an OTP URL, then this client
+ * opens that URL and talks the same ticks / balance / buy protocol as before.
+ * On reconnect it always mints a fresh OTP — they expire quickly.
  */
 export class DerivClient {
   private readonly options: Required<DerivClientOptions>;
@@ -58,8 +62,9 @@ export class DerivClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private closedByUser = false;
+  private connectGeneration = 0;
 
-  account: AuthorizeResponse["authorize"] | null = null;
+  account: OptionsAccount | null = null;
 
   constructor(options: DerivClientOptions) {
     this.options = { requestTimeoutMs: 20_000, ...options };
@@ -81,22 +86,12 @@ export class DerivClient {
 
   connect(): void {
     if (this.socket && this.socket.readyState <= WebSocket.OPEN) return;
-
-    this.closedByUser = false;
-    this.setState(this.reconnectAttempts > 0 ? "reconnecting" : "connecting");
-
-    const url = `${this.options.wsUrl}?app_id=${encodeURIComponent(this.options.appId)}`;
-    const socket = new WebSocket(url);
-    this.socket = socket;
-
-    socket.onopen = () => void this.handleOpen();
-    socket.onmessage = (event) => this.handleMessage(event);
-    socket.onerror = () => this.emitError(new Error("WebSocket transport error."));
-    socket.onclose = () => this.handleClose();
+    void this.openSocket();
   }
 
   disconnect(): void {
     this.closedByUser = true;
+    this.connectGeneration += 1;
     this.clearTimers();
     this.rejectAllPending(new Error("Client disconnected."));
     this.subscriptions.clear();
@@ -147,6 +142,38 @@ export class DerivClient {
     }
   }
 
+  private async openSocket(): Promise<void> {
+    this.closedByUser = false;
+    const generation = ++this.connectGeneration;
+    this.setState(this.reconnectAttempts > 0 ? "reconnecting" : "authorizing");
+
+    try {
+      const url = await requestSocketUrl(
+        {
+          appId: this.options.appId,
+          restUrl: this.options.restUrl,
+          token: this.options.token,
+        },
+        this.options.accountId,
+      );
+
+      if (generation !== this.connectGeneration || this.closedByUser) return;
+
+      this.setState(this.reconnectAttempts > 0 ? "reconnecting" : "connecting");
+      const socket = new WebSocket(url);
+      this.socket = socket;
+
+      socket.onopen = () => void this.handleOpen(generation);
+      socket.onmessage = (event) => this.handleMessage(event);
+      socket.onerror = () => this.emitError(new Error("WebSocket transport error."));
+      socket.onclose = () => this.handleClose();
+    } catch (error) {
+      if (generation !== this.connectGeneration || this.closedByUser) return;
+      this.emitError(error instanceof Error ? error : new Error(String(error)));
+      this.scheduleReconnect();
+    }
+  }
+
   private dispatch<T extends BaseResponse>(
     request: Record<string, unknown>,
     requestId: number = this.nextRequestId++,
@@ -172,23 +199,13 @@ export class DerivClient {
     });
   }
 
-  private async handleOpen(): Promise<void> {
-    this.setState("authorizing");
+  private async handleOpen(generation: number): Promise<void> {
+    if (generation !== this.connectGeneration || this.closedByUser) return;
 
-    try {
-      const response = await this.dispatch<AuthorizeResponse>({ authorize: this.options.token });
-      this.account = response.authorize;
-      this.reconnectAttempts = 0;
-      this.setState("ready");
-      this.startHeartbeat();
-      await this.restoreSubscriptions();
-    } catch (error) {
-      this.emitError(error instanceof Error ? error : new Error(String(error)));
-      // A bad token will never succeed on retry, so stop rather than loop.
-      this.closedByUser = true;
-      this.setState("error");
-      this.socket?.close();
-    }
+    this.reconnectAttempts = 0;
+    this.setState("ready");
+    this.startHeartbeat();
+    await this.restoreSubscriptions();
   }
 
   private async restoreSubscriptions(): Promise<void> {
@@ -254,6 +271,10 @@ export class DerivClient {
       return;
     }
 
+    this.scheduleReconnect();
+  }
+
+  private scheduleReconnect(): void {
     this.setState("reconnecting");
     const delay = Math.min(1000 * 2 ** this.reconnectAttempts, MAX_BACKOFF_MS);
     this.reconnectAttempts += 1;

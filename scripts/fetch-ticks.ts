@@ -2,12 +2,15 @@
  * Downloads tick history from Deriv into data/<symbol>.json so backtests run
  * offline and repeatedly over the same series.
  *
+ * Uses the public Options WebSocket — no token required.
+ *
  *   npm run fetch-ticks -- --symbol R_100 --count 50000
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { lastDigit } from "../src/lib/deriv/types";
 
 const MAX_PER_REQUEST = 5000;
+const PUBLIC_WS = "wss://api.derivws.com/trading/v1/options/ws/public";
 
 interface Args {
   symbol: string;
@@ -34,12 +37,11 @@ interface HistoryMessage {
   history?: { prices: number[]; times: number[] };
 }
 
-function connect(appId: string): Promise<WebSocket> {
-  const url = `wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`;
-  const socket = new WebSocket(url);
+function connect(): Promise<WebSocket> {
+  const socket = new WebSocket(PUBLIC_WS);
   return new Promise((resolve, reject) => {
     socket.addEventListener("open", () => resolve(socket), { once: true });
-    socket.addEventListener("error", () => reject(new Error("Could not reach Deriv.")), {
+    socket.addEventListener("error", () => reject(new Error("Could not reach Deriv public WebSocket.")), {
       once: true,
     });
   });
@@ -69,14 +71,9 @@ function request(socket: WebSocket, payload: Record<string, unknown>): Promise<H
 
 async function main() {
   const { symbol, count } = parseArgs();
-  const appId = process.env.VITE_DERIV_APP_ID?.trim();
-  if (!appId) {
-    console.error("VITE_DERIV_APP_ID is not set. Fill it into .env first.");
-    process.exit(1);
-  }
 
-  console.log(`Fetching ${count} ticks of ${symbol}…`);
-  const socket = await connect(appId);
+  console.log(`Fetching ${count} ticks of ${symbol} via public Options WebSocket…`);
+  const socket = await connect();
 
   const times: number[] = [];
   const prices: number[] = [];
@@ -96,7 +93,6 @@ async function main() {
     if (!message.history || message.history.times.length === 0) break;
     pipSize = message.pip_size ?? pipSize;
 
-    // Batches arrive newest-last and we page backwards, so prepend.
     times.unshift(...message.history.times);
     prices.unshift(...message.history.prices);
 

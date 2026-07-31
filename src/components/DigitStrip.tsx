@@ -3,30 +3,30 @@ interface DigitStripProps {
   count?: number;
 }
 
-export function DigitStrip({ digits, count = 24 }: DigitStripProps) {
+export function DigitStrip({ digits, count = 40 }: DigitStripProps) {
   const recent = digits.slice(-count);
 
   return (
-    <section className="panel">
-      <h2 className="panel__title">
-        Last {recent.length} digits
-        <span className="panel__hint">newest on the right</span>
-      </h2>
-      <div className="digit-strip">
-        {recent.map((digit, index) => {
-          const isLatest = index === recent.length - 1;
-          return (
-            <span
-              key={`${index}-${digit}`}
-              className={`digit-chip ${isLatest ? "digit-chip--latest" : ""} ${
-                digit % 2 === 0 ? "digit-chip--even" : "digit-chip--odd"
-              }`}
-            >
-              {digit}
-            </span>
-          );
-        })}
-        {recent.length === 0 ? <span className="panel__empty">Waiting for ticks…</span> : null}
+    <section className="ticker" aria-label={`Last ${count} digits, newest on the right`}>
+      <div className="ticker__label">Stream</div>
+      <div className="ticker__track">
+        {recent.length === 0 ? (
+          <span className="empty">Waiting for ticks…</span>
+        ) : (
+          recent.map((digit, index) => {
+            const isLatest = index === recent.length - 1;
+            return (
+              <span
+                key={`${index}-${digit}-${isLatest ? "live" : "past"}`}
+                className={`ticker__chip ${isLatest ? "is-live" : ""} ${
+                  digit % 2 === 0 ? "is-even" : "is-odd"
+                }`}
+              >
+                {digit}
+              </span>
+            );
+          })
+        )}
       </div>
     </section>
   );

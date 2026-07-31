@@ -2,9 +2,11 @@
 
 interface ImportMetaEnv {
   readonly VITE_DERIV_APP_ID?: string;
-  readonly VITE_DERIV_WS_URL?: string;
+  readonly VITE_DERIV_REST_URL?: string;
   readonly VITE_DERIV_TOKEN_DEMO?: string;
   readonly VITE_DERIV_TOKEN_REAL?: string;
+  readonly VITE_DERIV_DEMO_ACCOUNT_ID?: string;
+  readonly VITE_DERIV_REAL_ACCOUNT_ID?: string;
   readonly VITE_DERIV_ACCOUNT?: string;
   readonly VITE_TRADING_MODE?: string;
   readonly VITE_DEFAULT_SYMBOL?: string;

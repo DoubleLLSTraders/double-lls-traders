@@ -114,6 +114,121 @@ export function summarise(digits: number[]): DigitStats {
   };
 }
 
+/**
+ * Wilson score interval (proportion). Used to stop treating noisy cold/hot
+ * extremes as if they had already cleared break-even.
+ */
+export function wilsonInterval(
+  successes: number,
+  n: number,
+  z = 1.96,
+): { lower: number; upper: number } {
+  if (n <= 0) return { lower: 0, upper: 1 };
+  const p = Math.min(1, Math.max(0, successes / n));
+  const z2 = z * z;
+  const denom = 1 + z2 / n;
+  const centre = p + z2 / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p) + z2 / (4 * n)) / n);
+  return {
+    lower: Math.max(0, (centre - margin) / denom),
+    upper: Math.min(1, (centre + margin) / denom),
+  };
+}
+
+/**
+ * True when the chosen hot/cold digit leads its runner-up by enough counts
+ * that the ranking is not a one-tick flap.
+ */
+export function hasClearDigitLead(
+  stats: DigitStats,
+  digit: number,
+  side: "DIGITMATCH" | "DIGITDIFF",
+  minLead = 2,
+): boolean {
+  if (stats.sampleSize < 50) return false;
+  const count = stats.counts[digit] ?? 0;
+  if (side === "DIGITMATCH") {
+    const rival = stats.hottest.find((d) => d !== digit);
+    if (rival === undefined) return true;
+    return count >= (stats.counts[rival] ?? 0) + minLead;
+  }
+  const rival = stats.coldest.find((d) => d !== digit);
+  if (rival === undefined) return true;
+  return count <= (stats.counts[rival] ?? 0) - minLead;
+}
+
+/**
+ * Matches should target a hot barrier; Differs a cold one. Prevents gating on
+ * one digit while firing another (stale prediction / manual mismatch).
+ */
+export function barrierAlignsWithSide(
+  stats: DigitStats,
+  digit: number,
+  side: "DIGITMATCH" | "DIGITDIFF",
+): boolean {
+  if (stats.sampleSize < 50) return false;
+  const stable = pickStableDigit(stats, side, digit);
+  if (digit !== stable) return false;
+  if (side === "DIGITMATCH") {
+    return stats.hottest.slice(0, 3).includes(digit);
+  }
+  return stats.coldest.slice(0, 3).includes(digit);
+}
+
+/** Coldest digit must lead the runner-up by at least minPpGap percentage points. */
+export function coldBarrierMarginOk(
+  stats: DigitStats,
+  digit: number,
+  minPpGap = 1,
+): boolean {
+  if (stats.sampleSize < 50) return false;
+  const rival = stats.coldest.find((d) => d !== digit);
+  if (rival === undefined) return true;
+  const pct = stats.percentages[digit] ?? 0;
+  const rivalPct = stats.percentages[rival] ?? 0;
+  return pct <= rivalPct - minPpGap;
+}
+
+/**
+ * Stable barrier pick: strict count lead, ties broken by gap (Matches → more
+ * recent; Differs → longer absence).
+ */
+export function pickStableDigit(
+  stats: DigitStats,
+  side: "DIGITMATCH" | "DIGITDIFF",
+  fallback: number,
+): number {
+  if (side === "DIGITMATCH") {
+    const a = stats.hottest[0];
+    const b = stats.hottest[1];
+    if (a === undefined) return fallback;
+    if (b === undefined) return a;
+    if (stats.counts[a] !== stats.counts[b]) {
+      return stats.counts[a] > stats.counts[b] ? a : b;
+    }
+    const ga = stats.gaps[a];
+    const gb = stats.gaps[b];
+    if (ga === null && gb === null) return a;
+    if (ga === null) return b;
+    if (gb === null) return a;
+    return ga <= gb ? a : b;
+  }
+
+  const a = stats.coldest[0];
+  const b = stats.coldest[1];
+  if (a === undefined) return fallback;
+  if (b === undefined) return a;
+  if (stats.counts[a] !== stats.counts[b]) {
+    return stats.counts[a] < stats.counts[b] ? a : b;
+  }
+  const ga = stats.gaps[a];
+  const gb = stats.gaps[b];
+  if (ga === null && gb === null) return a;
+  if (ga === null) return a;
+  if (gb === null) return b;
+  return ga >= gb ? a : b;
+}
+
 // --- Chi-square distribution ------------------------------------------------
 // Survival function via the regularised upper incomplete gamma function
 // Q(k/2, x/2), using a series expansion below the transition point and a

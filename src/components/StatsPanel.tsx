@@ -7,83 +7,59 @@ interface StatsPanelProps {
 
 function uniformityVerdict(stats: DigitStats): string {
   if (stats.sampleSize < 100) {
-    return "Not enough ticks yet to say anything about the distribution.";
+    return "Need 100+ ticks for a meaningful uniformity check.";
   }
   if (stats.uniformity.significant) {
-    return `The spread is wider than a fair 10% generator usually produces (p = ${stats.uniformity.pValue.toFixed(
-      4,
-    )}). Worth a second look, though it will still be noise most of the time.`;
+    return `Distribution differs from 10% (p=${stats.uniformity.pValue.toFixed(4)}). Not proof of edge.`;
   }
-  return `The spread is what a fair 10% generator normally produces (p = ${stats.uniformity.pValue.toFixed(
-    2,
-  )}). No edge visible here.`;
+  return `Within random range (p=${stats.uniformity.pValue.toFixed(2)}). No clear edge.`;
 }
 
 export function StatsPanel({ stats, selectedDigit }: StatsPanelProps) {
-  const { currentStreak, evenCount, oddCount, sampleSize, percentages, gaps } = stats;
+  const { currentStreak, evenCount, sampleSize, percentages, gaps } = stats;
   const evenPercent = sampleSize === 0 ? 0 : (evenCount / sampleSize) * 100;
 
   return (
-    <section className="panel">
-      <h2 className="panel__title">Statistics</h2>
+    <section className="panel stats-panel">
+      <div className="panel__head">
+        <h2>Stats</h2>
+        <span>χ² {stats.uniformity.statistic.toFixed(2)}</span>
+      </div>
 
-      <dl className="stats-grid">
-        <div className="stat">
-          <dt>Current streak</dt>
-          <dd>
+      <div className="stat-chips">
+        <div className="stat-chip">
+          <span>Streak</span>
+          <strong>
             {currentStreak.digit === null
-              ? "–"
-              : `${currentStreak.digit} × ${currentStreak.length}`}
-          </dd>
+              ? "—"
+              : `${currentStreak.digit}×${currentStreak.length}`}
+          </strong>
         </div>
-        <div className="stat">
-          <dt>Even / Odd</dt>
-          <dd>
-            {evenPercent.toFixed(1)}% / {(100 - evenPercent).toFixed(1)}%
-          </dd>
+        <div className="stat-chip">
+          <span>Even / Odd</span>
+          <strong>
+            {evenPercent.toFixed(0)}/{(100 - evenPercent).toFixed(0)}
+          </strong>
         </div>
-        <div className="stat">
-          <dt>Hottest</dt>
-          <dd>{stats.hottest.join("  ")}</dd>
+        <div className="stat-chip">
+          <span>Hot</span>
+          <strong>{stats.hottest.join(" ")}</strong>
         </div>
-        <div className="stat">
-          <dt>Coldest</dt>
-          <dd>{stats.coldest.join("  ")}</dd>
+        <div className="stat-chip">
+          <span>Cold</span>
+          <strong>{stats.coldest.join(" ")}</strong>
         </div>
-        <div className="stat">
-          <dt>Sample</dt>
-          <dd>
-            {sampleSize} ticks · {evenCount}/{oddCount}
-          </dd>
-        </div>
-        <div className="stat">
-          <dt>Chi-square</dt>
-          <dd>
-            {stats.uniformity.statistic.toFixed(2)} (df {stats.uniformity.degreesOfFreedom})
-          </dd>
-        </div>
-      </dl>
+      </div>
 
       <p className={`verdict ${stats.uniformity.significant ? "verdict--flag" : ""}`}>
         {uniformityVerdict(stats)}
       </p>
 
       {selectedDigit !== null ? (
-        <div className="selected-digit">
-          <h3 className="selected-digit__title">Digit {selectedDigit}</h3>
-          <p>
-            Appeared {percentages[selectedDigit].toFixed(1)}% of the last {sampleSize} ticks, last
-            seen{" "}
-            {gaps[selectedDigit] === null
-              ? "not at all in this window"
-              : `${gaps[selectedDigit]} ticks ago`}
-            .
-          </p>
-          <p className="selected-digit__reality">
-            The true probability of the next tick ending in {selectedDigit} is 10%, regardless of
-            the numbers above. A gap does not make it "due".
-          </p>
-        </div>
+        <p className="selected-note">
+          Digit <strong>{selectedDigit}</strong> · {percentages[selectedDigit].toFixed(1)}% ·{" "}
+          {gaps[selectedDigit] === null ? "outside window" : `${gaps[selectedDigit]} ticks ago`}
+        </p>
       ) : null}
     </section>
   );

@@ -1,4 +1,4 @@
-/** Subset of the Deriv WebSocket API v3 we actually use. */
+/** Subset of the Deriv Options WebSocket protocol we use. */
 
 export interface DerivError {
   code: string;
@@ -13,16 +13,12 @@ export interface BaseResponse {
   subscription?: { id: string };
 }
 
-export interface AuthorizeResponse extends BaseResponse {
-  msg_type: "authorize";
-  authorize: {
-    loginid: string;
-    balance: number;
-    currency: string;
-    is_virtual: 0 | 1;
-    email?: string;
-    fullname?: string;
-  };
+export interface OptionsAccount {
+  accountId: string;
+  balance: number;
+  currency: string;
+  isVirtual: boolean;
+  status: string;
 }
 
 export interface BalanceResponse extends BaseResponse {
@@ -31,6 +27,7 @@ export interface BalanceResponse extends BaseResponse {
     balance: number;
     currency: string;
     loginid: string;
+    id?: string;
   };
 }
 
@@ -51,6 +48,8 @@ export interface TickResponse extends BaseResponse {
     quote: number;
     pip_size: number;
     id?: string;
+    ask?: number;
+    bid?: number;
   };
 }
 
@@ -62,6 +61,25 @@ export interface PingResponse extends BaseResponse {
 export interface ForgetResponse extends BaseResponse {
   msg_type: "forget";
   forget: 0 | 1;
+}
+
+export interface ProposalResponse extends BaseResponse {
+  msg_type: "proposal";
+  proposal: {
+    id: string;
+    ask_price: number;
+    payout: number;
+    spot?: number;
+  };
+}
+
+export interface BuyResponse extends BaseResponse {
+  msg_type: "buy";
+  buy: {
+    contract_id: number;
+    buy_price: number;
+    payout: number;
+  };
 }
 
 /** A single price observation, normalised for our own use. */

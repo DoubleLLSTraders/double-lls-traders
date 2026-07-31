@@ -1,13 +1,15 @@
 # Brick Trader
 
-Desktop-ready analysis and trading tool for Deriv Matches / Differs on synthetic indices (starting with Volatility 100).
+Live Deriv Matches / Differs analysis and bot for synthetic indices (Volatility 75 and others).
 
-Currently: live digit analysis in the browser, offline backtester with Monte Carlo ruin analysis. Trade execution is not wired up yet — paper mode is the only path until a strategy survives the backtester.
+**Public app (after deploy):** https://munyivaemmanuel-rgb.github.io/brick-trader/
 
-## Setup
+**Source repo:** https://github.com/munyivaemmanuel-rgb/brick-trader
 
-1. Register a web app on the [Deriv developer portal](https://api.deriv.com). Take the `app_id`. Redirect URL can be blank (or any public https URL — localhost is rejected and we don't use OAuth anyway). Authorisation scope: **Trade only**.
-2. Create an API token on your **virtual** account with **Read + Trade** scopes. Nothing else.
+## Setup (local)
+
+1. Register an app on the [Deriv developer dashboard](https://developers.deriv.com/dashboard/). Copy the App ID. Markup must be **0%**. Authorisation scope: **Trade** only.
+2. Create a Personal Access Token on your **Demo** account at [home.deriv.com → profile → API tokens](https://home.deriv.com/dashboard/profile/api-tokens) with **Trade** scope.
 3. Copy the env template and fill it in:
 
 ```bash
@@ -19,6 +21,7 @@ Required fields:
 ```
 VITE_DERIV_APP_ID=...
 VITE_DERIV_TOKEN_DEMO=...
+VITE_DERIV_DEMO_ACCOUNT_ID=DOT...   # from npm run check-auth
 ```
 
 Leave `VITE_DERIV_TOKEN_REAL` empty. Keep `VITE_TRADING_MODE=paper` and `VITE_DERIV_ACCOUNT=demo`.
@@ -27,10 +30,34 @@ Leave `VITE_DERIV_TOKEN_REAL` empty. Keep `VITE_TRADING_MODE=paper` and `VITE_DE
 
 ```bash
 npm install
+npm run check-auth
 npm run dev
 ```
 
-Open http://localhost:5173. You should see a live digit feed for R_100.
+Open http://localhost:5173. You should see your demo balance and a live digit feed.
+
+## Deploy (GitHub Pages — use on any device)
+
+Every push to `master` builds and publishes the site.
+
+1. Make the repo **public** (Settings → General → Danger zone → Change visibility).
+2. Enable **Pages**: Settings → Pages → Build and deployment → Source: **GitHub Actions**.
+3. Add **Actions secrets** (Settings → Secrets and variables → Actions → New repository secret). Copy values from your local `.env`:
+
+| Secret | Required |
+|--------|----------|
+| `VITE_DERIV_APP_ID` | yes |
+| `VITE_DERIV_TOKEN_DEMO` | yes |
+| `VITE_DERIV_DEMO_ACCOUNT_ID` | recommended |
+| `VITE_TRADING_MODE` | `live` or `paper` |
+| `VITE_DERIV_TOKEN_REAL` | optional |
+| `VITE_DERIV_REAL_ACCOUNT_ID` | optional |
+
+4. Push to `master`. Check **Actions** tab for the deploy workflow, then open:
+
+   **https://munyivaemmanuel-rgb.github.io/brick-trader/**
+
+Tokens are baked in at build time (Vite). To rotate keys, update secrets and re-run the workflow.
 
 ## Backtester
 
@@ -58,13 +85,12 @@ npm run verify-backtest
 
 | Piece | Status |
 |---|---|
-| Deriv WebSocket client (auth, subscribe, heartbeat, reconnect) | done |
-| Live digit strip, frequency bars, chi-square uniformity test | done |
-| Basket Matches backtester (split / per-contract stake modes) | done |
-| Martingale Monte Carlo with ruin rate | done |
-| Paper trading | next |
-| Live execution + risk kill-switch | later |
-| Tauri always-on-top overlay | later (browser first) |
+| Deriv Options REST + OTP WebSocket client | done |
+| Live digit analysis, bot panel, market scan | done |
+| Demo / real account switcher | done |
+| Live Differs bot (take-profit, bulk contracts) | done |
+| AI Operator (Matches) | done |
+| Offline backtester + Monte Carlo | done |
 
 ## Safety defaults
 
