@@ -6222,6 +6222,49 @@ html[data-theme="light"] .tick-chart__frame {
   margin-bottom: 0;
 }
 
+.auth-screen__google-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: min(100%, 320px);
+  padding: 12px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: #131314;
+  color: #e8eaed;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.auth-screen__google-btn:hover:not(:disabled) {
+  background: #1f1f20;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.auth-screen__google-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.auth-screen__google-mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  color: #4285f4;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
 .auth-screen__divider {
   display: flex;
   align-items: center;

@@ -10,8 +10,7 @@ import {
 } from "../lib/auth/store";
 import {
   isAllowedEmail,
-  isGoogleAuthConfigured,
-  parseGoogleCredential,
+  profileFromFirebaseUser,
   type GoogleProfile,
 } from "../lib/auth/google";
 import { createTotpSecret, verifyTotpCode } from "../lib/auth/totp";
@@ -23,11 +22,11 @@ import {
 } from "../lib/auth/totpRemote";
 import { isFirebaseConfigured } from "../lib/firebase/config";
 import {
+  explainFirebaseAuthError,
   firebaseMatchesEmail,
-  signInFirebaseWithGoogle,
+  signInWithGooglePopup,
   signOutFirebase,
   waitForFirebaseAuth,
-  explainFirebaseAuthError,
 } from "../lib/firebase/auth";
 import {
   clearAuthFailures,
@@ -58,7 +57,7 @@ export interface AppAuth {
   setupSecret: string | null;
   setupUri: string | null;
   setupBackupCodes: string[];
-  signInWithGoogle: (credential: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   confirmTotpSetup: (code: string) => Promise<boolean>;
   verifyTotp: (code: string) => Promise<boolean>;
   setVerifyMode: (mode: VerifyMode) => void;
@@ -70,7 +69,7 @@ export interface AppAuth {
 }
 
 export function isAccessControlConfigured(): boolean {
-  return isGoogleAuthConfigured() && isFirebaseConfigured();
+  return isFirebaseConfigured();
 }
 
 export function useAppAuthState(): AppAuth {
@@ -183,21 +182,20 @@ export function useAppAuthState(): AppAuth {
     setPhase("totp-setup");
   }, []);
 
-  const signInWithGoogle = useCallback(
-    async (credential: string) => {
+  const signInWithGoogle = useCallback(async () => {
       setError(null);
       setBusy(true);
       setPhase("loading");
 
       try {
-        const profile = parseGoogleCredential(credential);
+        const firebaseUser = await signInWithGooglePopup();
+        const profile = profileFromFirebaseUser(firebaseUser);
         if (!isAllowedEmail(profile.email)) {
+          await signOutFirebase();
           setError(`This Google account is not authorized for ${APP_NAME}.`);
           setPhase("sign-in");
           return;
         }
-
-        await signInFirebaseWithGoogle(credential);
 
         setPendingProfile(profile);
         let remote = await fetchTotpRecord(profile.email);
@@ -244,9 +242,7 @@ export function useAppAuthState(): AppAuth {
       } finally {
         setBusy(false);
       }
-    },
-    [beginTotpSetup],
-  );
+  }, [beginTotpSetup]);
 
   const confirmTotpSetup = useCallback(
     async (code: string) => {
@@ -416,4 +412,4 @@ export function useAppAuthState(): AppAuth {
   );
 }
 
-export { isGoogleAuthConfigured };
+export { isGoogleAuthConfigured } from "../lib/auth/google";

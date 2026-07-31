@@ -1,4 +1,3 @@
-import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
 import QRCode from "qrcode";
 import { useEffect, useState, type FormEvent } from "react";
 import { useTheme } from "../hooks/useTheme";
@@ -64,12 +63,11 @@ function AuthConfigNotice() {
         </p>
         <ul className="auth-screen__list">
           <li>
-            <code>VITE_GOOGLE_CLIENT_ID</code> — OAuth Web client from the{" "}
-            <strong>same Firebase / Google Cloud project</strong> (Authentication → Google → Web client
-            ID). Must match <code>VITE_FIREBASE_PROJECT_ID</code>.
+            Firebase Console → Authentication → Sign-in method → <strong>enable Google</strong>.
           </li>
           <li>
-            Firebase Console → Authentication → Sign-in method → <strong>enable Google</strong>.
+            Firebase Console → Authentication → Settings → add <code>localhost</code> to authorized
+            domains if missing.
           </li>
           <li>
             <code>VITE_FIREBASE_API_KEY</code>, <code>VITE_FIREBASE_PROJECT_ID</code>,{" "}
@@ -135,17 +133,20 @@ function SignInPanel() {
       subtitle="Sign in with Google, then enter your Google Authenticator code. No password."
     >
       <div className="auth-screen__google">
-        <GoogleLogin
-          onSuccess={(response: CredentialResponse) => {
-            if (response.credential) void auth.signInWithGoogle(response.credential);
+        <button
+          type="button"
+          className="auth-screen__google-btn"
+          disabled={auth.busy}
+          onClick={() => {
+            auth.clearError();
+            void auth.signInWithGoogle();
           }}
-          onError={() => auth.reportError("Google sign-in was cancelled or failed.")}
-          useOneTap={false}
-          theme="filled_black"
-          size="large"
-          text="continue_with"
-          shape="pill"
-        />
+        >
+          <span className="auth-screen__google-mark" aria-hidden="true">
+            G
+          </span>
+          {auth.busy ? "Signing in…" : "Continue with Google"}
+        </button>
       </div>
 
       <div className="auth-screen__divider" aria-hidden="true">

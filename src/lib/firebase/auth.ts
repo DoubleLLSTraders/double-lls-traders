@@ -2,7 +2,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
-  signInWithCredential,
+  signInWithPopup,
   signOut,
   type User,
 } from "firebase/auth";
@@ -27,10 +27,11 @@ export function waitForFirebaseAuth(timeoutMs = 8000): Promise<User | null> {
   });
 }
 
-export async function signInFirebaseWithGoogle(idToken: string): Promise<User> {
+export async function signInWithGooglePopup(): Promise<User> {
   const auth = getAuth(getFirebaseApp());
-  const credential = GoogleAuthProvider.credential(idToken);
-  const result = await signInWithCredential(auth, credential);
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  const result = await signInWithPopup(auth, provider);
   return result.user;
 }
 
@@ -58,10 +59,19 @@ export function explainFirebaseAuthError(error: unknown): string {
     msg.includes("Invalid Idp Response")
   ) {
     return (
-      "Google OAuth client does not match your Firebase project. " +
-      "In Firebase Console → Authentication → Sign-in method → Google: enable Google, copy the Web client ID shown there, " +
-      "paste it into VITE_GOOGLE_CLIENT_ID in .env, restart the dev server, and add http://localhost:5173 to that client's authorized origins."
+      "Google sign-in is not linked to this Firebase project. " +
+      "Open Firebase Console → Authentication → Sign-in method → Google, enable it, " +
+      "then add localhost under Authentication → Settings → Authorized domains."
     );
+  }
+  if (msg.includes("auth/popup-closed-by-user")) {
+    return "Google sign-in was cancelled.";
+  }
+  if (msg.includes("auth/popup-blocked")) {
+    return "Pop-up blocked. Allow pop-ups for this site and try again.";
+  }
+  if (msg.includes("auth/unauthorized-domain")) {
+    return "This domain is not authorized in Firebase. Add it under Authentication → Settings → Authorized domains.";
   }
   return msg || "Google sign-in failed.";
 }

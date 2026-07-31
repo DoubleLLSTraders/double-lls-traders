@@ -1,3 +1,4 @@
+import type { User } from "firebase/auth";
 import { ALLOWED_EMAILS } from "./constants";
 
 export interface GoogleProfile {
@@ -15,6 +16,7 @@ function decodeJwtPayload(credential: string): Record<string, unknown> {
   return JSON.parse(json) as Record<string, unknown>;
 }
 
+/** Legacy JWT parse — prefer profileFromFirebaseUser after Firebase popup sign-in. */
 export function parseGoogleCredential(credential: string): GoogleProfile {
   const payload = decodeJwtPayload(credential);
   const email = String(payload.email ?? "").trim().toLowerCase();
@@ -26,6 +28,20 @@ export function parseGoogleCredential(credential: string): GoogleProfile {
   if (!emailVerified) throw new Error("Verify this Google account's email before signing in.");
 
   return { email, name, picture, emailVerified };
+}
+
+export function profileFromFirebaseUser(user: User): GoogleProfile {
+  const email = user.email?.trim().toLowerCase() ?? "";
+  if (!email) throw new Error("Google did not return an email address.");
+  if (!user.emailVerified) {
+    throw new Error("Verify this Google account's email before signing in.");
+  }
+  return {
+    email,
+    name: user.displayName?.trim() || email,
+    picture: user.photoURL ?? undefined,
+    emailVerified: true,
+  };
 }
 
 export function isAllowedEmail(email: string): boolean {
