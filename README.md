@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./logo-exports/logo-256-transparent.png" alt="Double LLS Traders" width="120" />
+<img src="./logo-exports/logo-cropped.png" alt="Double LLS Traders" width="160" />
 
 # Double LLS Traders
 
@@ -17,11 +17,7 @@ Live digit analysis · automated Differs engine · AI operator · hardened risk 
 
 <br />
 
-<img src="./logo-exports/logo-light-256-transparent.png" alt="Double LLS Traders light mark" width="80" />
-
-<br />
-
-<sub>Designed & built by <strong>Joseph Nyarandi</strong></sub><br />
+<sub>Founded by <strong>Emmanuel Mwendwa</strong> · built by <strong>Joseph Nyarandi</strong></sub><br />
 <sub><em>Double LLS Traders · precision over noise</em></sub>
 
 </div>
@@ -250,10 +246,12 @@ npm run run-bot      # headless bot cycle (CLI)
 
 <table>
 <tr>
-<td width="80"><img src="./logo-exports/logo-64-transparent.png" alt="LLS" width="64" /></td>
+<td width="96" align="center"><img src="./logo-exports/logo-cropped.png" alt="Double LLS Traders" width="80" /></td>
 <td>
 
+**Emmanuel Mwendwa** — founder  
 **Joseph Nyarandi** — architect & builder  
+
 *Double LLS Traders* — institutional-grade digit desk for Deriv synthetic indices  
 
 </td>
