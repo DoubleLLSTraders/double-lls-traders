@@ -6690,3 +6690,56 @@ html[data-theme="light"] .tick-chart__frame {
     gap: 4px;
   }
 }
+
+.settings-live-verify {
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px solid rgba(229, 57, 53, 0.35);
+  border-radius: 14px;
+  background: rgba(229, 57, 53, 0.06);
+}
+
+.settings-live-verify__head h4 {
+  margin: 10px 0 6px;
+  font-size: 15px;
+}
+
+.settings-live-verify__head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.settings-live-verify__form {
+  margin-top: 14px;
+}
+
+.settings-live-verify__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.settings-live-verify__cancel {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-live-verify__cancel:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.settings-live-verify__actions .auth-screen__submit {
+  flex: 1;
+  margin: 0;
+}

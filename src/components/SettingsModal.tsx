@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useAppAuth } from "../context/AuthContext";
 import { accountCredentials, getAccountKind, setAccountKind } from "../lib/accountMode";
 import {
@@ -6,7 +6,13 @@ import {
   MAX_AUTH_FAILURES,
   SESSION_TTL_MS,
 } from "../lib/auth/constants";
-import { isAuthLocked } from "../lib/auth/security";
+import {
+  clearAuthFailures,
+  isAuthLocked,
+  lockoutMessage,
+  recordAuthFailure,
+} from "../lib/auth/security";
+import { verifyTotpCode } from "../lib/auth/totp";
 import {
   fetchTotpRecord,
   hasRecoveryCodes,
@@ -57,11 +63,13 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
   const [totpRecord, setTotpRecord] = useState<TotpRecord | null>(null);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [liveVerifyOpen, setLiveVerifyOpen] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setAcknowledged(false);
       setTab("profile");
+      setLiveVerifyOpen(false);
       return;
     }
 
@@ -142,8 +150,23 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
 
   function choose(kind: AccountKind) {
     if (kind === active || botRunning) return;
-    if (kind === "real" && !acknowledged) return;
-    setAccountKind(kind);
+
+    if (kind === "demo") {
+      setLiveVerifyOpen(false);
+      setAccountKind("demo");
+      onClose();
+      return;
+    }
+
+    if (kind === "real") {
+      if (!acknowledged) return;
+      setLiveVerifyOpen(true);
+    }
+  }
+
+  function confirmLiveSwitch() {
+    setAccountKind("real");
+    setLiveVerifyOpen(false);
     onClose();
   }
 
@@ -218,7 +241,12 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
                 realAccount={realAccount}
                 accounts={accounts}
                 loadError={loadError}
+                liveVerifyOpen={liveVerifyOpen}
+                onCancelLiveVerify={() => setLiveVerifyOpen(false)}
                 onChoose={choose}
+                onConfirmLiveSwitch={confirmLiveSwitch}
+                email={auth.session?.email ?? null}
+                totpRecord={totpRecord}
               />
             ) : null}
           </div>
@@ -394,6 +422,13 @@ function SecurityPanel({
             </dd>
           </div>
           <div className="settings-kv__row">
+            <dt>Live account switch</dt>
+            <dd>
+              <span className="settings-badge settings-badge--ok">Authenticator required</span>
+              <small> · Demo → Live in Settings</small>
+            </dd>
+          </div>
+          <div className="settings-kv__row">
             <dt>Brute-force lockout</dt>
             <dd>
               {lockout?.locked && lockout.until ? (
@@ -451,7 +486,12 @@ function TradingPanel({
   realAccount,
   accounts,
   loadError,
+  liveVerifyOpen,
+  onCancelLiveVerify,
   onChoose,
+  onConfirmLiveSwitch,
+  email,
+  totpRecord,
 }: {
   active: AccountKind;
   botRunning: boolean;
@@ -461,69 +501,192 @@ function TradingPanel({
   realAccount: OptionsAccount | null;
   accounts: OptionsAccount[] | null;
   loadError: string | null;
+  liveVerifyOpen: boolean;
+  onCancelLiveVerify: () => void;
   onChoose: (kind: AccountKind) => void;
+  onConfirmLiveSwitch: () => void;
+  email: string | null;
+  totpRecord: TotpRecord | null;
 }) {
   return (
     <section className="modal__section settings-modal__section">
       <h3>Deriv account</h3>
       <p className="modal__note">
-        Switching reconnects the feed and reloads the balance. Trade history stays.
+        Switching reconnects the feed and reloads the balance. Trade history stays. Moving to{" "}
+        <strong>Live</strong> requires Google Authenticator verification.
       </p>
 
-      <div className="acctpick">
-        <AccountOption
-          kind="demo"
-          label="Demo"
-          detail="Practice money. Nothing at risk."
-          account={demoAccount}
-          active={active === "demo"}
-          disabled={botRunning}
-          onSelect={onChoose}
+      {liveVerifyOpen ? (
+        <LiveSwitchVerify
+          email={email}
+          totpRecord={totpRecord}
+          onCancel={onCancelLiveVerify}
+          onVerified={onConfirmLiveSwitch}
         />
-        <AccountOption
-          kind="real"
-          label="Live"
-          detail="Real money. Every loss is yours."
-          account={realAccount}
-          active={active === "real"}
-          disabled={botRunning || !acknowledged}
-          onSelect={onChoose}
-        />
+      ) : (
+        <>
+          <div className="acctpick">
+            <AccountOption
+              kind="demo"
+              label="Demo"
+              detail="Practice money. Nothing at risk."
+              account={demoAccount}
+              active={active === "demo"}
+              disabled={botRunning}
+              onSelect={onChoose}
+            />
+            <AccountOption
+              kind="real"
+              label="Live"
+              detail="Real money. Every loss is yours."
+              account={realAccount}
+              active={active === "real"}
+              disabled={botRunning || !acknowledged}
+              onSelect={onChoose}
+            />
+          </div>
+
+          {loadError ? <p className="modal__error">Could not read accounts · {loadError}</p> : null}
+
+          {accounts && !realAccount ? (
+            <p className="modal__error">
+              This token cannot see a real account. Add one on Deriv, or set VITE_DERIV_TOKEN_REAL in
+              .env.
+            </p>
+          ) : null}
+
+          {realAccount && realAccount.balance <= 0 && active !== "real" ? (
+            <p className="modal__warn">
+              The live account holds {realAccount.balance.toFixed(2)} {realAccount.currency}. Trades
+              will be rejected until it is funded.
+            </p>
+          ) : null}
+
+          {active !== "real" ? (
+            <label className="modal__ack">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                disabled={botRunning}
+                onChange={(event) => setAcknowledged(event.target.checked)}
+              />
+              <span>
+                I understand live trading risks real money, and that this bot runs at a negative
+                expected value of about −1.3% per trade.
+              </span>
+            </label>
+          ) : null}
+
+          {botRunning ? (
+            <p className="modal__warn">Stop the bot before switching accounts.</p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+function LiveSwitchVerify({
+  email,
+  totpRecord,
+  onCancel,
+  onVerified,
+}: {
+  email: string | null;
+  totpRecord: TotpRecord | null;
+  onCancel: () => void;
+  onVerified: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+
+    if (!email) {
+      setError("Session expired. Sign in again.");
+      return;
+    }
+
+    const lock = isAuthLocked(email);
+    if (lock.locked && lock.until) {
+      setError(lockoutMessage(lock.until));
+      return;
+    }
+
+    const secret = totpRecord?.secret;
+    if (!secret) {
+      setError("2FA is not configured for this account. Sign in again to set up Authenticator.");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      if (!verifyTotpCode(secret, code)) {
+        const failed = recordAuthFailure(email);
+        if (failed.locked && failed.until) {
+          setError(lockoutMessage(failed.until));
+        } else {
+          setError("Invalid Authenticator code. Try again.");
+        }
+        return;
+      }
+
+      clearAuthFailures(email);
+      onVerified();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-live-verify">
+      <div className="settings-live-verify__head">
+        <span className="settings-badge settings-badge--warn">Live switch</span>
+        <h4>Confirm with Google Authenticator</h4>
+        <p>
+          Enter your 6-digit code to switch from Demo to Live
+          {email ? ` as ${email}` : ""}.
+        </p>
       </div>
 
-      {loadError ? <p className="modal__error">Could not read accounts · {loadError}</p> : null}
-
-      {accounts && !realAccount ? (
-        <p className="modal__error">
-          This token cannot see a real account. Add one on Deriv, or set VITE_DERIV_TOKEN_REAL in
-          .env.
-        </p>
-      ) : null}
-
-      {realAccount && realAccount.balance <= 0 && active !== "real" ? (
-        <p className="modal__warn">
-          The live account holds {realAccount.balance.toFixed(2)} {realAccount.currency}. Trades
-          will be rejected until it is funded.
-        </p>
-      ) : null}
-
-      {active !== "real" ? (
-        <label className="modal__ack">
+      <form className="auth-screen__form settings-live-verify__form" onSubmit={submit}>
+        <label className="auth-screen__field">
+          <span>6-digit Authenticator code</span>
           <input
-            type="checkbox"
-            checked={acknowledged}
-            disabled={botRunning}
-            onChange={(event) => setAcknowledged(event.target.checked)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            value={code}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="000000"
+            autoFocus
+            disabled={busy}
           />
-          <span>
-            I understand live trading risks real money, and that this bot runs at a negative
-            expected value of about −1.3% per trade.
-          </span>
         </label>
-      ) : null}
+        <div className="settings-live-verify__actions">
+          <button
+            type="button"
+            className="settings-live-verify__cancel"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="auth-screen__submit"
+            disabled={busy || code.length !== 6}
+          >
+            {busy ? "Verifying…" : "Switch to Live"}
+          </button>
+        </div>
+      </form>
 
-      {botRunning ? <p className="modal__warn">Stop the bot before switching accounts.</p> : null}
-    </section>
+      {error ? <p className="modal__error">{error}</p> : null}
+    </div>
   );
 }
 
