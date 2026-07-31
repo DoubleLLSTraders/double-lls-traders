@@ -661,8 +661,8 @@ export function BotPanel({
                 <>Live mode · apply recommended settings before Start</>
               ) : differsFastActive ? (
                 <>
-                  <strong>Differs</strong> · cold gap ≥4 · stop after 1 loss · take
-                  profit ~1.90
+                  <strong>Differs</strong> · deep-check next prediction · same
+                  digit after a win = stop · max 2 wins / Start
                 </>
               ) : (
                 <>Custom bot settings · not on the Differs profile</>

@@ -1,0 +1,110 @@
+rules_version = '2';
+
+// Deploy: `firebase deploy --only firestore:rules`
+//
+// Data model (aligned with release upload wizard):
+//   Step 1 — title, description
+//   Step 2 — performingArtist, producer, featuredArtists, credits
+//   Step 3 — lyrics, coverStoragePath
+//   Step 4 — priceCents
+//   Step 5 — audio via server API only (not client Firestore)
+//   Step 6 — scheduledPublishAt, publishTiming
+//
+// Server (Admin SDK) writes users, artistProfiles, release tracks, followers.
+// Clients: read own profile; artists may save in-progress drafts under releases/{uid}/drafts.
+//
+// Brick Trader: totp_secrets/{email} — Double LLS Traders Google Authenticator + hashed recovery codes.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.role == 'ADMIN';
+    }
+
+    function isArtist() {
+      return signedIn()
+        && (request.auth.token.role == 'ARTIST' || request.auth.token.role == 'ADMIN');
+    }
+
+    function validDraftFields() {
+      let d = request.resource.data;
+      return d.title is string
+        && d.title.size() > 0
+        && d.title.size() <= 120
+        && (!('description' in d) || (d.description is string && d.description.size() <= 2000))
+        && (!('performingArtist' in d) || (d.performingArtist is string && d.performingArtist.size() <= 120))
+        && (!('producer' in d) || (d.producer is string && d.producer.size() <= 200))
+        && (!('featuredArtists' in d) || (d.featuredArtists is string && d.featuredArtists.size() <= 500))
+        && (!('credits' in d) || (d.credits is string && d.credits.size() <= 2000))
+        && (!('lyrics' in d) || (d.lyrics is string && d.lyrics.size() <= 50000))
+        && (!('priceCents' in d) || (d.priceCents is int && d.priceCents >= 100 && d.priceCents <= 99999900))
+        && (!('coverStoragePath' in d) || d.coverStoragePath == null || d.coverStoragePath is string)
+        && (!('scheduledPublishAt' in d) || d.scheduledPublishAt == null || d.scheduledPublishAt is string)
+        && (!('publishTiming' in d) || d.publishTiming in ['manual', 'scheduled'])
+        && (!('step' in d) || (d.step is int && d.step >= 1 && d.step <= 6));
+    }
+
+    // Brick Trader — Google Authenticator TOTP secrets (client read/write, email doc id)
+    match /totp_secrets/{email} {
+      allow read, write: if email in [
+        'munyivaemmanuel@gmail.com',
+        'josephokero074@gmail.com',
+      ];
+    }
+
+    // Auth profile mirror (server-written)
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // Public artist storefront (server-written)
+    match /artistProfiles/{userId} {
+      allow read: if resource.data.isPublic == true
+        || isOwner(userId)
+        || isAdmin();
+      allow create, update, delete: if false;
+
+      match /followers/{followerId} {
+        allow read: if get(/databases/$(database)/documents/artistProfiles/$(userId)).data.isPublic == true
+          || isOwner(followerId)
+          || isOwner(userId)
+          || isAdmin();
+        allow create, update, delete: if false;
+      }
+    }
+
+    // Release catalogue + in-progress wizard drafts
+    match /releases/{artistUid} {
+      allow read: if isOwner(artistUid) || isAdmin();
+
+      // Wizard draft (steps 1–6 metadata; files in Storage under release-drafts/)
+      match /drafts/{draftId} {
+        allow read: if isOwner(artistUid) || isAdmin();
+        allow create: if isOwner(artistUid) && isArtist() && validDraftFields();
+        allow update: if isOwner(artistUid) && isArtist() && validDraftFields();
+        allow delete: if isOwner(artistUid) && isArtist();
+      }
+
+      // Published / processing tracks (server-written after /api/tracks)
+      match /tracks/{trackId} {
+        allow read: if resource.data.status == 'PUBLISHED'
+          || isOwner(artistUid)
+          || isAdmin();
+        allow create, update, delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

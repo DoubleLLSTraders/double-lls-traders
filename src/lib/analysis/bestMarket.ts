@@ -1,6 +1,7 @@
 import { summarise } from "./digits";
 import {
   buildMarketSignal,
+  isArmedSignal,
   pickBetterSignal,
   setupEdgePoints,
   type MarketSignal,
@@ -23,10 +24,10 @@ const SCAN_MARKETS = [
   { symbol: "R_75", name: "Volatility 75 Index" },
 ] as const;
 
-const SCAN_COUNT = 2500;
-const WINDOW_SIZES = [1000, 2000] as const;
-/** Primary window for ranking; must clear the ~865-tick significance bar. */
-const PRIMARY_WINDOW = 1000;
+const SCAN_COUNT = 3000;
+const WINDOW_SIZES = [1500, 2000, 2500] as const;
+/** Primary window for ranking — matches elite sample floor. */
+const PRIMARY_WINDOW = 1500;
 
 export interface MarketScanResult {
   symbol: string;
@@ -81,6 +82,8 @@ function scoreSignal(
     else setupRank -= 1200;
     if (signal.coldMarginOk) setupRank += 450;
     if (signal.barrierAligned) setupRank += 250;
+    if (signal.primaryBarrier) setupRank += 350;
+    if (signal.uniqueEvOk) setupRank += 400;
     setupRank += Math.min(600, (signal.watching.signalGap ?? 0) * 60);
   } else if (sidePreference === "matches") {
     if (signal.side !== "DIGITMATCH") setupRank -= 5000;
@@ -89,6 +92,9 @@ function scoreSignal(
   } else {
     setupRank += signal.timingOk ? 400 : -400;
   }
+
+  setupRank += signal.power * 2;
+  if (isArmedSignal(signal)) setupRank += 2000;
 
   return payoutRank + paceRank + setupRank;
 }
@@ -132,9 +138,45 @@ function signalForDigits(
   return pickBetterSignal(match, diff, settings.sidePreference);
 }
 
+export interface FindBestMarketOptions {
+  /** Markets to skip — used when the current index is stuck so we pick a fresh one. */
+  excludeSymbols?: string[];
+  /**
+   * Prefer a setup whose cold/momentum gap already clears. When requireReady
+   * is also set, a soft prefer is not enough — see requireReady.
+   */
+  preferReady?: boolean;
+  /**
+   * Hard filter: only return a market that is tradeable right now
+   * (timing + barrier + cold margin for Differs). If none qualify, returns null
+   * so the caller can stop instead of jumping onto a bad index.
+   */
+  requireReady?: boolean;
+}
+
+function isTradeReady(
+  signal: MarketSignal,
+  sidePreference: BotSettings["sidePreference"],
+): boolean {
+  const prefersDiffers =
+    sidePreference === "differs" || sidePreference === "winrate";
+  if (!isArmedSignal(signal)) return false;
+  if (!signal.timingOk || !signal.barrierAligned || !signal.primaryBarrier) {
+    return false;
+  }
+  if (prefersDiffers) {
+    if (signal.side !== "DIGITDIFF") return false;
+    if (!signal.coldMarginOk) return false;
+  } else if (sidePreference === "matches") {
+    if (signal.side !== "DIGITMATCH") return false;
+  }
+  return true;
+}
+
 /**
  * Score every listed volatility market and return the strongest analyzer setup.
- * Falls back to `fallbackSymbol` if the scan fails entirely.
+ * Falls back to `fallbackSymbol` if the scan fails entirely — unless
+ * `requireReady` is set, in which case a null means "nothing is tradeable".
  */
 export async function findBestMarket(
   client: DerivClient,
@@ -143,20 +185,42 @@ export async function findBestMarket(
     "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
   >,
   fallbackSymbol: string,
-): Promise<MarketScanResult> {
+  options: FindBestMarketOptions & { requireReady: true },
+): Promise<MarketScanResult | null>;
+export async function findBestMarket(
+  client: DerivClient,
+  settings: Pick<
+    BotSettings,
+    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
+  >,
+  fallbackSymbol: string,
+  options?: FindBestMarketOptions,
+): Promise<MarketScanResult>;
+export async function findBestMarket(
+  client: DerivClient,
+  settings: Pick<
+    BotSettings,
+    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
+  >,
+  fallbackSymbol: string,
+  options: FindBestMarketOptions = {},
+): Promise<MarketScanResult | null> {
+  const excluded = new Set(options.excludeSymbols ?? []);
   // Fetched together so Start is one round-trip of latency, not ten.
   const settled = await Promise.allSettled(
-    SCAN_MARKETS.map(async (market): Promise<MarketScanResult> => {
-      const digits = await fetchDigits(client, market.symbol);
-      if (digits.length < PRIMARY_WINDOW) throw new Error("not enough history");
-      const signal = signalForDigits(digits, settings, market.symbol);
-      return {
-        symbol: market.symbol,
-        name: market.name,
-        signal,
-        score: scoreSignal(signal, market.symbol, settings.sidePreference),
-      };
-    }),
+    SCAN_MARKETS.filter((market) => !excluded.has(market.symbol)).map(
+      async (market): Promise<MarketScanResult> => {
+        const digits = await fetchDigits(client, market.symbol);
+        if (digits.length < PRIMARY_WINDOW) throw new Error("not enough history");
+        const signal = signalForDigits(digits, settings, market.symbol);
+        return {
+          symbol: market.symbol,
+          name: market.name,
+          signal,
+          score: scoreSignal(signal, market.symbol, settings.sidePreference),
+        };
+      },
+    ),
   );
 
   const ranked: MarketScanResult[] = settled
@@ -167,6 +231,7 @@ export async function findBestMarket(
     .map((result) => result.value);
 
   if (ranked.length === 0) {
+    if (options.requireReady) return null;
     return {
       symbol: fallbackSymbol,
       name: SCAN_MARKETS.find((m) => m.symbol === fallbackSymbol)?.name ?? fallbackSymbol,
@@ -176,6 +241,7 @@ export async function findBestMarket(
         label: "—",
         reason: "Scan unavailable · keeping current market",
         confidence: "low",
+        power: 0,
         windowsAgree: false,
         digitPercent: 10,
         evOk: false,
@@ -186,6 +252,8 @@ export async function findBestMarket(
         barrierAligned: false,
         windowFair: true,
         coldMarginOk: false,
+        primaryBarrier: false,
+        uniqueEvOk: false,
         watching: {
           lastDigit: null,
           streak: "—",
@@ -205,6 +273,24 @@ export async function findBestMarket(
   }
 
   ranked.sort((a, b) => b.score - a.score);
+
+  if (options.requireReady) {
+    const ready = ranked.find(
+      (entry) =>
+        !isLowPayoutSymbol(entry.symbol) &&
+        isTradeReady(entry.signal, settings.sidePreference),
+    );
+    return ready ?? null;
+  }
+
+  if (options.preferReady) {
+    const ready = ranked.find(
+      (entry) =>
+        !isLowPayoutSymbol(entry.symbol) &&
+        isTradeReady(entry.signal, settings.sidePreference),
+    );
+    if (ready) return ready;
+  }
   const preferred = ranked.find((entry) => !isLowPayoutSymbol(entry.symbol));
   return preferred ?? ranked[0];
 }

@@ -15,11 +15,11 @@ import { effectiveDiffMultiple, isLowPayoutSymbol } from "./performance";
 /** Best measured Differs stake on R_75 (payout rounding). scripts/check-beststake */
 export const LIVE_OPTIMAL_STAKE = 1.75;
 
-/** Demo: auto runs from take-profit bank. Real micro: fixed cap per Start. */
-export const REAL_MAX_RUNS = 2;
+/** Demo/real: one armed trade then bank — deep gate refuses follow-ups. */
+export const REAL_MAX_RUNS = 1;
 
-/** ~10 wins at 1.75 on R_75 — demo take-profit bank. */
-export const DEMO_TAKE_PROFIT_WINS = 10;
+/** One win at stake, then stop — pressing after a win is where streaks die. */
+export const DEMO_TAKE_PROFIT_WINS = 1;
 
 /** @deprecated demo now uses runsForTakeProfit — kept for scripts/docs */
 export const DEMO_MAX_RUNS = 0;

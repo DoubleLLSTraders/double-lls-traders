@@ -1,10 +1,122 @@
 import type { MarketSignal } from "../analysis/signal";
-import { confirmScore, isFullyConfirmed } from "../analysis/signal";
-import { isDiffersLiveQuality } from "./differsProfile";
+import { confirmScore, isArmedSignal } from "../analysis/signal";
 import { isLowPayoutSymbol, profitRate } from "./performance";
 import type { BotSettings } from "./types";
 
 export type GateResult = { ok: true } | { ok: false; reason: string };
+
+export type DoubtResult = { doubtful: false } | { doubtful: true; reason: string };
+
+/**
+ * Strict quality check for the *next* trade after a run has already started.
+ *
+ * Take-profit and max-runs are profit targets, not permission to keep firing
+ * into a soft setup. Any of these flags means bank what you have and stop —
+ * even after a single win.
+ *
+ * `requireFullConfidence` (default true for follow-up trades) demands the
+ * analyzer's high tier — all five confirms green + power floor. Anything less
+ * is treated as doubt, including a setup that merely "looks ok" on cold gap.
+ */
+export function nextTradeDoubt(
+  settings: BotSettings,
+  signal: MarketSignal,
+  extras?: {
+    coolBarrierDigit?: number | null;
+    symbol?: string;
+    /** When true (follow-up trades), only a fully armed high-confidence setup is allowed. */
+    requireFullConfidence?: boolean;
+  },
+): DoubtResult {
+  if (extras?.symbol && isLowPayoutSymbol(extras.symbol)) {
+    return { doubtful: true, reason: `Doubt · ${extras.symbol} is a low-payout index` };
+  }
+  if (signal.watching.sampleSize < settings.minSample) {
+    return {
+      doubtful: true,
+      reason: `Doubt · sample ${signal.watching.sampleSize}/${settings.minSample}`,
+    };
+  }
+  if (signal.confidence !== "high") {
+    return {
+      doubtful: true,
+      reason: `Doubt · confidence ${signal.confidence} · need high for next trade`,
+    };
+  }
+  if (!signal.barrierAligned) {
+    return {
+      doubtful: true,
+      reason:
+        signal.side === "DIGITMATCH"
+          ? `Doubt · Matches ${signal.digit} is not the hot pick`
+          : `Doubt · Differs ${signal.digit} is not the cold barrier`,
+    };
+  }
+  if (!signal.timingOk) {
+    return {
+      doubtful: true,
+      reason:
+        signal.side === "DIGITMATCH"
+          ? `Doubt · momentum gap ${signal.watching.signalGap ?? "—"} > ${settings.maxMomentumGap}`
+          : `Doubt · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap}`,
+    };
+  }
+  if (signal.side === "DIGITDIFF") {
+    if (!signal.coldMarginOk) {
+      return {
+        doubtful: true,
+        reason: `Doubt · cold barrier too close (${signal.watching.separation || "—"})`,
+      };
+    }
+    if (!signal.separationOk) {
+      return {
+        doubtful: true,
+        reason: `Doubt · cold lead unclear (${signal.watching.separation || "—"})`,
+      };
+    }
+    if (
+      extras?.coolBarrierDigit !== null &&
+      extras?.coolBarrierDigit !== undefined &&
+      signal.digit === extras.coolBarrierDigit
+    ) {
+      return {
+        doubtful: true,
+        reason: `Doubt · Differs ${signal.digit} already lost this run`,
+      };
+    }
+  }
+  if (!signal.evOk) {
+    return {
+      doubtful: true,
+      reason:
+        signal.side === "DIGITDIFF"
+          ? `Doubt · EV closed · ${signal.watching.wilsonBound || `${signal.digitPercent.toFixed(1)}%`}`
+          : `Doubt · EV closed (${signal.digitPercent.toFixed(1)}%)`,
+    };
+  }
+  if (!signal.windowsAgree) {
+    return {
+      doubtful: true,
+      reason: `Doubt · windows disagree (${signal.watching.windowVotes || "—"})`,
+    };
+  }
+  if (!signal.windowsEvOk) {
+    return {
+      doubtful: true,
+      reason: `Doubt · multi-window EV (${signal.watching.windowEv || "—"})`,
+    };
+  }
+
+  const score = confirmScore(signal);
+  const needFull = extras?.requireFullConfidence !== false;
+  if (needFull && !isArmedSignal(signal)) {
+    return {
+      doubtful: true,
+      reason: `Doubt · confirms ${score}/5 · power ${signal.power} · need armed high`,
+    };
+  }
+  return { doubtful: false };
+}
 
 /** Shared entry filters for paper + live bots and the analyzer UI. */
 export function evaluateEntry(
@@ -48,37 +160,36 @@ export function evaluateEntry(
       reason: `Skip · sample ${signal.watching.sampleSize}/${settings.minSample}`,
     };
   }
-  if (settings.skipLowConfidence && signal.confidence === "low") {
-    return { ok: false, reason: "Skip · confidence still low" };
+  if (settings.skipLowConfidence && signal.confidence !== "high") {
+    return {
+      ok: false,
+      reason: `Skip · confidence ${signal.confidence} · need high`,
+    };
   }
 
   const score = confirmScore(signal);
 
   if (settings.requireFullConfirm) {
-    // Master switch: every layer green. The individual toggles below are
-    // deliberately skipped, since this already implies all of them.
-    if (!isFullyConfirmed(signal)) {
-      return { ok: false, reason: `Skip · confirms ${score}/5` };
+    // Master switch: every layer green + high armed. Individual toggles below
+    // are skipped — this already implies them.
+    if (!isArmedSignal(signal)) {
+      return {
+        ok: false,
+        reason: `Skip · confirms ${score}/5 · ${signal.confidence} · power ${signal.power}`,
+      };
     }
   } else {
     // Each toggle is the only thing standing between the signal and an order,
     // so they are checked here rather than after the master switch. Running
     // them in both branches made the switches look live while doing nothing.
     if (!signal.evOk) {
-      const differsFast =
-        settings.side === "DIGITDIFF" &&
-        settings.minColdGap <= 4 &&
-        !settings.requireMultiWindow &&
-        !isDiffersLiveQuality(settings);
-      if (!differsFast) {
-        return {
-          ok: false,
-          reason:
-            signal.side === "DIGITDIFF"
-              ? `Skip · EV closed · ${signal.watching.wilsonBound || `${signal.digitPercent.toFixed(1)}%`}`
-              : `Skip · EV closed (${signal.digitPercent.toFixed(1)}%)`,
-        };
-      }
+      return {
+        ok: false,
+        reason:
+          signal.side === "DIGITDIFF"
+            ? `Skip · EV closed · ${signal.watching.wilsonBound || `${signal.digitPercent.toFixed(1)}%`}`
+            : `Skip · EV closed (${signal.digitPercent.toFixed(1)}%)`,
+      };
     }
     if (!signal.barrierAligned) {
       return {
@@ -100,13 +211,11 @@ export function evaluateEntry(
           reason: `Skip · Differs ${signal.digit} hit last loss · wait for new cold pick`,
         };
       }
-      if (isDiffersLiveQuality(settings)) {
-        if (!signal.separationOk && !signal.coldMarginOk) {
-          return {
-            ok: false,
-            reason: `Skip · cold barrier unclear (${signal.watching.separation || "—"})`,
-          };
-        }
+      if (!signal.separationOk || !signal.coldMarginOk) {
+        return {
+          ok: false,
+          reason: `Skip · cold barrier unclear (${signal.watching.separation || "—"})`,
+        };
       }
     }
     if (settings.requireMultiWindow && !signal.windowsAgree) {
@@ -143,14 +252,7 @@ export function evaluateEntry(
   // on the same digit staying away, so a single print takes the whole run down
   // at once. Waiting for the barrier to print resets the question before asking
   // it again, which is what makes each order independent.
-  // Differs fast: re-enter on the same cold barrier once timing clears again.
-  const differsFastReentry =
-    settings.side === "DIGITDIFF" &&
-    settings.minColdGap <= 4 &&
-    !settings.requireMultiWindow &&
-    !isDiffersLiveQuality(settings);
   if (
-    !differsFastReentry &&
     extras?.lastEntryDigit !== null &&
     extras?.lastEntryDigit !== undefined &&
     extras.lastEntryDigit === signal.digit &&

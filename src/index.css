@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Brick Trader — full-bleed rail + stage
+   Double LLS Traders — full-bleed rail + stage
    Dark: pure black · Light: neutral gray/white
    Display: Syne · UI: Outfit · Mono: JetBrains Mono
    Brand: neon green #00ff80 + white (logo)
@@ -1681,10 +1681,44 @@ html[data-theme="light"] .split-layout__handle:focus-visible {
 
 .brand-stamp__inner {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: start;
   gap: 14px;
   width: 100%;
+}
+
+.brand-stamp__mark {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 255, 128, 0.35);
+  background: linear-gradient(160deg, rgba(0, 255, 128, 0.12), rgba(0, 0, 0, 0.6));
+  flex-shrink: 0;
+}
+
+.brand-stamp__glyph {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.06em;
+  color: var(--green);
+}
+
+.brand-stamp__tagline {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--green-bright);
+  text-align: left;
+}
+
+.brand-stamp__badge--secure {
+  background: rgba(0, 255, 128, 0.1);
+  border-color: rgba(0, 255, 128, 0.35);
+  color: var(--green);
 }
 
 .brand-stamp__logo {
@@ -6137,4 +6171,300 @@ html[data-theme="light"] .tick-chart__frame {
     height: 34px;
     font-size: 13px;
   }
+}
+
+/* ── Access gate (Google + TOTP) ─────────────────────────────── */
+
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  background:
+    radial-gradient(circle at 50% -10%, rgba(0, 255, 128, 0.08), transparent 45%),
+    var(--bg);
+}
+
+.auth-screen__card {
+  width: min(440px, 100%);
+  padding: 28px 24px 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px var(--shadow-panel);
+  text-align: center;
+}
+
+.auth-screen__logo {
+  width: 72px;
+  height: auto;
+  margin: 0 auto 16px;
+  display: block;
+}
+
+.auth-screen__card h1 {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+.auth-screen__lead {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.auth-screen__google {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.auth-screen__hint,
+.auth-screen__note {
+  margin: 0;
+  color: var(--muted-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.auth-screen__list {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.auth-screen__list li + li {
+  margin-top: 6px;
+}
+
+.auth-screen__steps {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  text-align: left;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.auth-screen__qr {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.auth-screen__qr img {
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.auth-screen__qr-placeholder {
+  width: 220px;
+  height: 220px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.auth-screen__secret {
+  margin: 0 0 16px;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.auth-screen__secret code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.auth-screen__form {
+  display: grid;
+  gap: 12px;
+  text-align: left;
+}
+
+.auth-screen__field {
+  display: grid;
+  gap: 6px;
+}
+
+.auth-screen__field span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.auth-screen__field input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line-input);
+  border-radius: 12px;
+  background: var(--surface-input);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  letter-spacing: 0.28em;
+  text-align: center;
+}
+
+.auth-screen__submit {
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--green);
+  color: #04110a;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-screen__submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.auth-screen__link {
+  margin-top: 14px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.auth-screen__error {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(229, 57, 53, 0.4);
+  background: rgba(229, 57, 53, 0.1);
+  color: #e05b55;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.topbar__signout {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: var(--surface);
+  color: var(--hot);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.topbar__signout:hover {
+  color: #fff;
+  border-color: rgba(248, 113, 113, 0.55);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.auth-screen__recovery {
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+}
+
+.auth-screen__recovery-head {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.auth-screen__recovery-head strong {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.auth-screen__recovery-head span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auth-screen__recovery-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-screen__recovery-list code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.auth-screen__download {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-screen__download:hover {
+  background: var(--green-dim);
+}
+
+.auth-screen__recovery-btn {
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-screen__recovery-btn:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.auth-screen__warn {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: #d08a1d;
+  text-align: left;
+}
+
+.modal__signout {
+  margin-top: 8px;
 }

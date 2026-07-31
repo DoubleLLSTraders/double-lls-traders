@@ -1,3 +1,5 @@
+import { APP_NAME } from "./brand";
+
 export type AccountKind = "demo" | "real";
 export type TradingMode = "paper" | "live";
 
@@ -48,7 +50,7 @@ function readConfig(): AppConfig {
 
   const appId = (env.VITE_DERIV_APP_ID ?? "").trim();
   if (!appId) {
-    errors.push("VITE_DERIV_APP_ID is empty. Paste your Brick Trader app id into .env.");
+    errors.push(`VITE_DERIV_APP_ID is empty. Paste your ${APP_NAME} Deriv app id into .env.`);
   }
 
   const account: AccountKind = env.VITE_DERIV_ACCOUNT?.trim() === "real" ? "real" : "demo";

@@ -27,7 +27,10 @@ export interface MarketSignal {
   digit: number;
   label: string;
   reason: string;
-  confidence: "low" | "medium" | "soft";
+  /** low < soft < medium < high — only high is "fully armed" for follow-ups. */
+  confidence: "low" | "soft" | "medium" | "high";
+  /** 0–100 composite of how armed the setup is. */
+  power: number;
   /** True when short/mid/long windows pick the same signal digit. */
   windowsAgree: boolean;
   /** Window frequency of the signal digit (%). */
@@ -49,8 +52,12 @@ export interface MarketSignal {
   barrierAligned: boolean;
   /** χ² says the window is still consistent with fair 10% digits — no proven edge. */
   windowFair: boolean;
-  /** Coldest digit leads runner-up by ≥1pp — not a tie on noise. */
+  /** Coldest digit leads runner-up by a clear margin — not a tie on noise. */
   coldMarginOk: boolean;
+  /** Digit is the #1 cold (Differs) / #1 hot (Matches) — not merely top-3. */
+  primaryBarrier: boolean;
+  /** Signal digit clears EV while the runner-up does not — unique edge, not a pack. */
+  uniqueEvOk: boolean;
   watching: {
     lastDigit: number | null;
     streak: string;
@@ -101,9 +108,9 @@ function clearsEv(
 
 /**
  * Point estimate can clear break-even on noise (coldest-of-10 ≈ 8.5% at n=1000).
- * Differs: Wilson upper must still clear — fewer false cold opens.
- * Matches: point estimate gates entry (Wilson shown for info); full Wilson-lower
- * rarely opens and starved the Operator.
+ * Differs: Wilson upper must stay under break-even — the point estimate alone
+ * is almost always green on the coldest digit and was letting soft entries through.
+ * Matches: point estimate gates entry (Wilson shown for info).
  */
 function clearsEvWithWilson(
   side: ContractSide,
@@ -121,21 +128,22 @@ function clearsEvWithWilson(
     return { ok: false, boundLabel: "—" };
   }
 
+  // 99% Wilson (z≈2.576) — 95% still passed coldest-of-10 noise too often.
+  const z = 2.576;
   if (side === "DIGITMATCH") {
-    const { lower } = wilsonInterval(count, n, 1.64);
+    const { lower } = wilsonInterval(count, n, z);
     const lowerPct = lower * 100;
+    const need = breakEven + minEdgePercent;
     return {
-      ok: true,
-      boundLabel: `W↓ ${lowerPct.toFixed(1)}% · need ${breakEven.toFixed(1)}%`,
+      ok: lowerPct >= need,
+      boundLabel: `W↓ ${lowerPct.toFixed(1)}% · need ${need.toFixed(1)}%`,
     };
   }
 
-  // Differs fast: point under break-even is enough — Wilson is informational.
-  // The coldest digit (~8%) almost always clears; barrier + gap gates add quality.
-  const { upper } = wilsonInterval(count, n, 1.64);
+  const { upper } = wilsonInterval(count, n, z);
   const upperPct = upper * 100;
   const maxBarrier = breakEven - minEdgePercent;
-  const ok = pct <= maxBarrier;
+  const ok = pct <= maxBarrier && upperPct <= maxBarrier;
   return {
     ok,
     boundLabel: `${pct.toFixed(1)}% · W↑ ${upperPct.toFixed(1)}% · max ${maxBarrier.toFixed(1)}%`,
@@ -165,7 +173,9 @@ function windowVotes(
   const ready = picks.filter((p) => p.ready);
   const voteText = picks.map((p) => `${p.digit}@${p.size}${p.ready ? "" : "?"}`).join(" · ");
 
-  if (ready.length < 2) {
+  // Need every ready window (at least 2; prefer 3 when available) on the same digit.
+  const needReady = Math.min(3, picks.filter((p) => p.size >= 500).length || 2);
+  if (ready.length < Math.max(2, needReady)) {
     return { digit: primaryFallback, agree: false, votes: voteText };
   }
 
@@ -199,7 +209,13 @@ function multiWindowEv(
     const size = sizes[i] ?? stats.sampleSize;
     const pct = stats.percentages[digit] ?? 0;
     const ready = windowReady(stats.sampleSize, size);
-    const pass = ready && clearsEv(side, pct, minEdge, symbol);
+    // Differs multi-EV uses the same Wilson upper as the primary window —
+    // point-only multi-EV was rubber-stamping coldest-of-10 noise.
+    const pass =
+      ready &&
+      (side === "DIGITDIFF"
+        ? clearsEvWithWilson(side, stats, digit, minEdge, symbol).ok
+        : clearsEv(side, pct, minEdge, symbol));
     parts.push(`${pct.toFixed(1)}%@${size}${ready ? (pass ? "" : "×") : "?"}`);
     if (ready) {
       readyCount += 1;
@@ -288,13 +304,34 @@ export function buildMarketSignal(
     options.symbol,
   );
   const timingOk = timingClears(preferredSide, signalGap, maxMomentumGap, minColdGap);
-  const minLead = preferredSide === "DIGITDIFF" ? 2 : 2;
+  // Coldest-of-10 wobbles by 1–2 every tick — demand a decisive count lead.
+  const minLead = preferredSide === "DIGITDIFF" ? 12 : 5;
   const separationOk = hasClearDigitLead(stats, digit, preferredSide, minLead);
-  const structureOk = stats.uniformity.significant && separationOk;
   const barrierAligned = barrierAlignsWithSide(stats, digit, preferredSide);
+  const primaryBarrier =
+    preferredSide === "DIGITDIFF"
+      ? stats.coldest[0] === digit
+      : stats.hottest[0] === digit;
   const windowFair = !stats.uniformity.significant;
+  // 3pp cold margin ≈ 45 counts at n=1500 — near-ties flip constantly.
   const coldMarginOk =
-    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 1);
+    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 3);
+  // Only our barrier clears Wilson EV — runner-up in the cold/hot pack must fail.
+  const rival =
+    preferredSide === "DIGITDIFF"
+      ? stats.coldest.find((d) => d !== digit)
+      : stats.hottest.find((d) => d !== digit);
+  const rivalClears =
+    rival !== undefined &&
+    clearsEvWithWilson(preferredSide, stats, rival, minEdge, options.symbol).ok;
+  const uniqueEvOk = evOk && !rivalClears;
+  // Differs: χ² almost never rejects fair digits, so "structure" means a clear
+  // #1 cold barrier (lead + margin + primary + unique EV).
+  // Matches still wants χ² heat plus a stable lead.
+  const structureOk =
+    preferredSide === "DIGITDIFF"
+      ? separationOk && coldMarginOk && barrierAligned && primaryBarrier && uniqueEvOk
+      : stats.uniformity.significant && separationOk && primaryBarrier && uniqueEvOk;
 
   const watching = {
     lastDigit: stats.currentStreak.digit,
@@ -326,7 +363,10 @@ export function buildMarketSignal(
     barrierAligned,
     windowFair,
     coldMarginOk,
+    primaryBarrier,
+    uniqueEvOk,
     watching,
+    power: 0,
   };
 
   if (stats.sampleSize < 50) {
@@ -337,7 +377,8 @@ export function buildMarketSignal(
       reason: `Need ~50 ticks for ${
         preferredSide === "DIGITMATCH" ? "Matches" : "Differs"
       } frequency gates.`,
-      confidence: "low",
+      confidence: "low" as const,
+      power: 0,
       windowsAgree: false,
       digitPercent: stats.percentages[fallbackDigit] ?? 0,
       evOk: false,
@@ -348,6 +389,8 @@ export function buildMarketSignal(
       barrierAligned: false,
       windowFair: true,
       coldMarginOk: false,
+      primaryBarrier: false,
+      uniqueEvOk: false,
       watching: {
         ...watching,
         signalGap: stats.gaps[fallbackDigit] ?? null,
@@ -358,11 +401,45 @@ export function buildMarketSignal(
   }
 
   const allConfirm = evOk && vote.agree && multiEv.ok && timingOk && structureOk;
-  const confidence: MarketSignal["confidence"] = allConfirm
-    ? "medium"
-    : stats.sampleSize >= WINDOW_READY_FLOOR && evOk && separationOk
-      ? "soft"
-      : "low";
+  const gapStrong =
+    signalGap !== null &&
+    (preferredSide === "DIGITDIFF"
+      ? signalGap >= minColdGap + 8
+      : signalGap <= Math.max(0, maxMomentumGap - 1));
+  const sampleElite = stats.sampleSize >= 1500;
+  const highArmed =
+    allConfirm &&
+    barrierAligned &&
+    primaryBarrier &&
+    coldMarginOk &&
+    separationOk &&
+    uniqueEvOk &&
+    gapStrong &&
+    sampleElite;
+
+  const confidence: MarketSignal["confidence"] = highArmed
+    ? "high"
+    : allConfirm
+      ? "medium"
+      : stats.sampleSize >= WINDOW_READY_FLOOR && evOk && separationOk && timingOk
+        ? "soft"
+        : "low";
+
+  const power = scoreAnalyzerPower({
+    evOk,
+    windowsAgree: vote.agree,
+    windowsEvOk: multiEv.ok,
+    timingOk,
+    structureOk,
+    barrierAligned,
+    coldMarginOk,
+    separationOk,
+    gapStrong,
+    sampleReady: sampleElite,
+    primaryBarrier,
+    uniqueEvOk,
+  });
+  base.power = power;
 
   const confirmBits = [
     `EV ${evOk ? "ok" : "no"} (${wilson.boundLabel})`,
@@ -371,16 +448,26 @@ export function buildMarketSignal(
     preferredSide === "DIGITMATCH"
       ? `momentum gap ${signalGap ?? "—"}≤${maxMomentumGap} ${timingOk ? "ok" : "no"}`
       : `cold gap ${signalGap ?? "—"}≥${minColdGap} ${timingOk ? "ok" : "no"}`,
-    `lead ${separationOk ? "ok" : "thin"} · χ² ${stats.uniformity.significant ? "uneven" : "fair"}`,
+    `lead ${separationOk ? "ok" : "thin"} · margin ${coldMarginOk ? "ok" : "thin"} · #1 ${primaryBarrier ? "ok" : "no"} · uniqueEV ${uniqueEvOk ? "ok" : "no"}`,
+    `power ${power} · ${confidence}`,
   ].join(" · ");
 
   if (preferredSide === "DIGITMATCH") {
     const need = breakEvenDigitPercent("DIGITMATCH", options.symbol) + minEdge;
+    if (highArmed) {
+      return {
+        ...base,
+        label: `Matches ${digit}`,
+        reason: `High-confidence Matches ${digit}: hot ${digitPercent.toFixed(1)}% ≥ ${need.toFixed(1)}%, Wilson clear, strong lead, recent print, multi-window EV. ${confirmBits}`,
+        confidence,
+        evOk: true,
+      };
+    }
     if (allConfirm) {
       return {
         ...base,
         label: `Matches ${digit}`,
-        reason: `Confirmed Matches ${digit}: hot ${digitPercent.toFixed(1)}% ≥ ${need.toFixed(1)}%, Wilson clear, stable lead, recent print, multi-window EV. ${confirmBits}`,
+        reason: `Confirmed Matches ${digit}: hot ${digitPercent.toFixed(1)}% ≥ ${need.toFixed(1)}% — waiting for stronger gap/lead for high. ${confirmBits}`,
         confidence,
         evOk: true,
       };
@@ -394,11 +481,20 @@ export function buildMarketSignal(
   }
 
   const maxBarrier = breakEvenDigitPercent("DIGITDIFF", options.symbol) - minEdge;
+  if (highArmed) {
+    return {
+      ...base,
+      label: `Differs ${digit}`,
+      reason: `High-confidence Differs ${digit}: cold ${digitPercent.toFixed(1)}% ≤ ${maxBarrier.toFixed(1)}%, Wilson upper clear, strong cold lead, deep absence, multi-window EV. ${confirmBits}`,
+      confidence,
+      evOk: true,
+    };
+  }
   if (allConfirm) {
     return {
       ...base,
       label: `Differs ${digit}`,
-      reason: `Confirmed Differs ${digit}: cold ${digitPercent.toFixed(1)}% ≤ ${maxBarrier.toFixed(1)}%, Wilson clear, stable lead, still absent, multi-window EV. ${confirmBits}`,
+      reason: `Confirmed Differs ${digit}: cold ${digitPercent.toFixed(1)}% ≤ ${maxBarrier.toFixed(1)}% — waiting for stronger gap/lead for high. ${confirmBits}`,
       confidence,
       evOk: true,
     };
@@ -425,6 +521,50 @@ export function confirmScore(signal: MarketSignal): number {
 
 export function isFullyConfirmed(signal: MarketSignal): boolean {
   return confirmScore(signal) === 5;
+}
+
+/** Top-tier armed setup — perfect power + high + unique #1 barrier. */
+export function isArmedSignal(signal: MarketSignal, minPower = 100): boolean {
+  return (
+    isFullyConfirmed(signal) &&
+    signal.confidence === "high" &&
+    signal.power >= minPower &&
+    signal.barrierAligned &&
+    signal.primaryBarrier &&
+    signal.coldMarginOk &&
+    signal.uniqueEvOk
+  );
+}
+
+function scoreAnalyzerPower(flags: {
+  evOk: boolean;
+  windowsAgree: boolean;
+  windowsEvOk: boolean;
+  timingOk: boolean;
+  structureOk: boolean;
+  barrierAligned: boolean;
+  coldMarginOk: boolean;
+  separationOk: boolean;
+  gapStrong: boolean;
+  sampleReady: boolean;
+  primaryBarrier: boolean;
+  uniqueEvOk: boolean;
+}): number {
+  const weights: Array<[boolean, number]> = [
+    [flags.evOk, 14],
+    [flags.windowsAgree, 10],
+    [flags.windowsEvOk, 10],
+    [flags.timingOk, 10],
+    [flags.structureOk, 8],
+    [flags.barrierAligned, 7],
+    [flags.primaryBarrier, 8],
+    [flags.coldMarginOk, 7],
+    [flags.separationOk, 7],
+    [flags.gapStrong, 6],
+    [flags.sampleReady, 5],
+    [flags.uniqueEvOk, 8],
+  ];
+  return weights.reduce((sum, [ok, w]) => sum + (ok ? w : 0), 0);
 }
 
 /** Edge distance past break-even in percentage points (higher = stronger setup). */
@@ -462,12 +602,19 @@ export function pickBetterSignal(
     return differs;
   }
 
-  // edge (default): confirmed side first, then stronger distance; Matches on tie.
+  // edge (default): armed/high first, then confirm score, then power, then distance.
+  const mArmed = isArmedSignal(matches);
+  const dArmed = isArmedSignal(differs);
+  if (mArmed && !dArmed) return matches;
+  if (dArmed && !mArmed) return differs;
   if (mFull && !dFull) return matches;
   if (dFull && !mFull) return differs;
   const mScore = confirmScore(matches);
   const dScore = confirmScore(differs);
   if (mScore !== dScore) return mScore > dScore ? matches : differs;
+  if (matches.power !== differs.power) {
+    return matches.power > differs.power ? matches : differs;
+  }
   const mEdge = setupEdgePoints(matches);
   const dEdge = setupEdgePoints(differs);
   if (Math.abs(mEdge - dEdge) < 0.05) return matches;

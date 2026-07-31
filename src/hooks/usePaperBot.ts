@@ -4,9 +4,10 @@ import type { Tick } from "../lib/deriv/types";
 import type { DerivClient } from "../lib/deriv/client";
 import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade";
 import type { MarketSignal } from "../lib/analysis/signal";
-import { confirmScore, isFullyConfirmed } from "../lib/analysis/signal";
+import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
 import { capStake, evaluateEntry, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
+import { analyzeNextPredictionDeep, MAX_WINS_BEFORE_BANK } from "../lib/bot/deepNext";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
 import { playLossSound, playWinSound } from "../lib/sound";
@@ -94,8 +95,19 @@ export function usePaperBot(options: {
   client: DerivClient | null;
   onSettings: (next: Partial<BotSettings>) => void;
   onStop: (reason: string) => void;
+  /**
+   * Ask the UI to abandon this market and pick another. Fired when cold-gap
+   * waits forever on a dead setup, or right after a Differs loss so we do not
+   * keep re-asking the same index.
+   */
+  onSwitchMarket?: (reason: string) => void;
   /** Set true synchronously on Stop — blocks new entries before React re-renders. */
   haltRef?: MutableRefObject<boolean>;
+  /**
+   * Mid-run market analysis latch. While true the bot must not open — the
+   * scanner is still ranking markets or the new feed has not finished loading.
+   */
+  switchHoldRef?: MutableRefObject<boolean>;
   isVirtual?: boolean;
   tradeNote?: string | null;
 }): PaperBotState {
@@ -111,7 +123,9 @@ export function usePaperBot(options: {
     client,
     onSettings,
     onStop,
+    onSwitchMarket,
     haltRef,
+    switchHoldRef,
     tradeNote = null,
     isVirtual = true,
   } = options;
@@ -149,14 +163,21 @@ export function usePaperBot(options: {
    */
   const onSettingsRef = useRef(onSettings);
   const onStopRef = useRef(onStop);
+  const onSwitchMarketRef = useRef(onSwitchMarket);
   const tradeNoteRef = useRef(tradeNote);
   const isVirtualRef = useRef(isVirtual);
   isVirtualRef.current = isVirtual;
   const runningRef = useRef(running);
   runningRef.current = running;
+  /** Consecutive cold-gap / cool-barrier skips on the current market. */
+  const stuckSkipsRef = useRef(0);
+  const lastSwitchEpochRef = useRef(0);
+  const symbolRef = useRef(symbol);
 
   const entriesBlocked = () =>
-    !runningRef.current || haltRef?.current === true;
+    !runningRef.current ||
+    haltRef?.current === true ||
+    switchHoldRef?.current === true;
 
   settingsRef.current = settings;
   signalRef.current = signal;
@@ -165,7 +186,22 @@ export function usePaperBot(options: {
   clientRef.current = client;
   onSettingsRef.current = onSettings;
   onStopRef.current = onStop;
+  onSwitchMarketRef.current = onSwitchMarket;
   tradeNoteRef.current = tradeNote;
+
+  // Fresh market: drop the cooled barrier from the previous index and reset
+  // the stuck-skip counter so we do not immediately re-request a switch.
+  useEffect(() => {
+    if (symbolRef.current === symbol) return;
+    symbolRef.current = symbol;
+    stuckSkipsRef.current = 0;
+    setSession((prev) => {
+      if (prev.coolBarrierDigit === null) return prev;
+      const next = { ...prev, coolBarrierDigit: null };
+      sessionRef.current = next;
+      return next;
+    });
+  }, [symbol]);
 
   const sizingSettings = (
     settings: BotSettings,
@@ -221,6 +257,8 @@ export function usePaperBot(options: {
     runOriginRef.current = { trades: 0, pnl: 0 };
     runsThisStartRef.current = 0;
     pnlThisStartRef.current = 0;
+    stuckSkipsRef.current = 0;
+    lastSwitchEpochRef.current = 0;
     setRunsThisStart(0);
     setPnlThisStart(0);
 
@@ -331,7 +369,7 @@ export function usePaperBot(options: {
         setLog((lines) =>
           pushLog(
             lines,
-            `Feed → ${liveSignal.label} (${liveSignal.confidence} · ${isFullyConfirmed(liveSignal) ? "armed" : "watch"})`,
+            `Feed → ${liveSignal.label} (${liveSignal.confidence} · power ${liveSignal.power} · ${isArmedSignal(liveSignal) ? "armed" : "watch"})`,
           ),
         );
       }
@@ -469,10 +507,10 @@ export function usePaperBot(options: {
         peakPnl,
         maxDrawdown,
         lastCloseEpoch: latest.epoch,
-        lastEntryDigit:
-          won && open.side === "DIGITDIFF" ? null : nextSession.lastEntryDigit,
-        lastEntryEpoch:
-          won && open.side === "DIGITDIFF" ? null : nextSession.lastEntryEpoch,
+        // Keep the barrier after a Differs win: that digit never printed, so
+        // re-backing it is the same unresolved bet. Deep analysis needs this.
+        lastEntryDigit: nextSession.lastEntryDigit,
+        lastEntryEpoch: nextSession.lastEntryEpoch,
         coolBarrierDigit:
           !won && open.side === "DIGITDIFF"
             ? open.digit
@@ -505,6 +543,64 @@ export function usePaperBot(options: {
             nextSettings.maxRuns > 0 ? `/${nextSettings.maxRuns}` : ""
           } · run P/L ${runPnl >= 0 ? "+" : ""}${runPnl.toFixed(2)}`,
         ),
+      );
+
+      // A loss is itself doubt — stop now.
+      if (!won) {
+        onStopRef.current("Stopped · loss · will not risk the next trade.");
+        setLog((lines) =>
+          pushLog(lines, "STOPPED · loss · session closed regardless of take-profit / runs"),
+        );
+        return;
+      }
+
+      // Hard bank after MAX_WINS_BEFORE_BANK wins this Start.
+      if (runsDone >= MAX_WINS_BEFORE_BANK) {
+        onStopRef.current(
+          `Stopped · banked ${runsDone} wins · will not press further.`,
+        );
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `STOPPED · banked ${runsDone} wins · take-profit/runs ignored`,
+          ),
+        );
+        return;
+      }
+
+      // Deep research on the *next* prediction before it can run. Same cold
+      // digit after a Differs win is refused (correlated bet). Anything short
+      // of a fully armed *new* setup → get out immediately.
+      const lastPrinted =
+        nextSession.lastEntryDigit === null || nextSession.lastEntryEpoch === null
+          ? true
+          : ticks.some(
+              (tick) =>
+                tick.epoch > nextSession.lastEntryEpoch! &&
+                tick.digit === nextSession.lastEntryDigit,
+            );
+      const deep = analyzeNextPredictionDeep({
+        signal: liveSignal,
+        settings: nextSettings,
+        symbol,
+        lastEntryDigit: open.digit,
+        lastEntryDigitPrinted: lastPrinted,
+        winsThisStart: nextSession.wins,
+        coolBarrierDigit: nextSession.coolBarrierDigit,
+      });
+      if (!deep.ok) {
+        onStopRef.current(deep.reason);
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `STOPPED · ${deep.reason} · banked after ${runsDone} win(s)`,
+          ),
+        );
+        return;
+      }
+
+      setLog((lines) =>
+        pushLog(lines, `NEXT · ${deep.summary} · allowing trade ${runsDone + 1}`),
       );
 
       const perf = computePerformance({
@@ -617,6 +713,10 @@ export function usePaperBot(options: {
     }
 
     if (!nextSession.open) {
+      if (switchHoldRef?.current) {
+        setWaitReason("Analyzing markets before next trade…");
+        return;
+      }
       if (entriesBlocked()) return;
       if (orderInFlight.current) return;
 
@@ -663,6 +763,60 @@ export function usePaperBot(options: {
                 tick.epoch > nextSession.lastEntryEpoch! &&
                 tick.digit === nextSession.lastEntryDigit,
             );
+      const runsDoneNow = nextSession.trades - runOriginRef.current.trades;
+
+      // Deep-analyze every prediction (first entry waits; follow-ups stop).
+      {
+        const lastPrinted =
+          nextSession.lastEntryDigit === null || nextSession.lastEntryEpoch === null
+            ? true
+            : ticks.some(
+                (tick) =>
+                  tick.epoch > nextSession.lastEntryEpoch! &&
+                  tick.digit === nextSession.lastEntryDigit,
+              );
+        const deep = analyzeNextPredictionDeep({
+          signal: liveSignal,
+          settings: nextSettings,
+          symbol,
+          lastEntryDigit: nextSession.lastEntryDigit,
+          lastEntryDigitPrinted: lastPrinted,
+          winsThisStart: nextSession.wins,
+          coolBarrierDigit: nextSession.coolBarrierDigit,
+          firstEntry: runsDoneNow < 1,
+        });
+        if (!deep.ok) {
+          if (runsDoneNow >= 1) {
+            onStopRef.current(deep.reason);
+            setLog((lines) =>
+              pushLog(
+                lines,
+                `STOPPED · ${deep.reason} · after ${runsDoneNow} trade(s)`,
+              ),
+            );
+            return;
+          }
+          nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
+          setSession(nextSession);
+          setWaitReason(deep.reason.replace(/^Deep ·/, "Wait ·"));
+          if (nextSession.skipped % 5 === 1) {
+            setLog((lines) => pushLog(lines, deep.reason));
+          }
+          stuckSkipsRef.current += 1;
+          if (stuckSkipsRef.current >= 80) {
+            stuckSkipsRef.current = 0;
+            onStopRef.current("Deep · first setup never armed · stopped");
+            setLog((lines) =>
+              pushLog(lines, "STOPPED · first setup never armed · get out"),
+            );
+          }
+          return;
+        }
+        if (runsDoneNow < 1 && nextSession.skipped % 8 === 0) {
+          setLog((lines) => pushLog(lines, `ARMED · ${deep.summary}`));
+        }
+      }
+
       const gate = evaluateEntry(nextSettings, liveSignal, {
         tradesLastHour: hourCount,
         drawdownPercent: drawdownPercent(nextSession, liveBalance),
@@ -679,15 +833,67 @@ export function usePaperBot(options: {
         if (nextSession.skipped % 5 === 1) {
           setLog((lines) => pushLog(lines, gate.reason));
         }
+
+        if (runsDoneNow >= 1) {
+          onStopRef.current(gate.reason.replace(/^Skip ·/, "Deep · "));
+          setLog((lines) =>
+            pushLog(lines, `STOPPED · ${gate.reason} · get out`),
+          );
+          return;
+        }
+
+        const qualitySkip =
+          gate.reason.startsWith("Skip · cold gap") ||
+          gate.reason.startsWith("Skip · momentum gap") ||
+          gate.reason.startsWith("Skip · EV") ||
+          gate.reason.startsWith("Skip · Differs") ||
+          gate.reason.startsWith("Skip · Matches") ||
+          gate.reason.startsWith("Skip · cold barrier") ||
+          gate.reason.startsWith("Skip · confidence") ||
+          gate.reason.startsWith("Skip · confirms");
+        if (qualitySkip) {
+          stuckSkipsRef.current += 1;
+        } else {
+          stuckSkipsRef.current = 0;
+        }
+        if (stuckSkipsRef.current >= 40) {
+          stuckSkipsRef.current = 0;
+          onStopRef.current("Deep · first setup never cleared · stopped");
+          setLog((lines) =>
+            pushLog(lines, "STOPPED · first setup never cleared · get out"),
+          );
+          return;
+        }
         return;
       }
 
-      // Final confirm at fire time — do not chase a signal that already decayed.
-      if (nextSettings.requireFullConfirm && !isFullyConfirmed(liveSignal)) {
-        nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
-        setSession(nextSession);
-        setWaitReason(`Skip · confirms ${confirmScore(liveSignal)}/5`);
-        return;
+      stuckSkipsRef.current = 0;
+
+      // Fire-time deep re-check — first entry and follow-ups.
+      {
+        const fireDeep = analyzeNextPredictionDeep({
+          signal: liveSignal,
+          settings: nextSettings,
+          symbol,
+          lastEntryDigit: nextSession.lastEntryDigit,
+          lastEntryDigitPrinted,
+          winsThisStart: nextSession.wins,
+          coolBarrierDigit: nextSession.coolBarrierDigit,
+          firstEntry: runsDoneNow < 1,
+        });
+        if (!fireDeep.ok) {
+          if (runsDoneNow >= 1) {
+            onStopRef.current(fireDeep.reason);
+            setLog((lines) =>
+              pushLog(lines, `STOPPED · faded at fire · ${fireDeep.reason}`),
+            );
+            return;
+          }
+          nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
+          setSession(nextSession);
+          setWaitReason(fireDeep.reason.replace(/^Deep ·/, "Wait ·"));
+          return;
+        }
       }
 
       setWaitReason(

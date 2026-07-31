@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useAppAuth } from "../context/AuthContext";
 import { accountCredentials, getAccountKind, setAccountKind } from "../lib/accountMode";
 import { config, type AccountKind } from "../lib/config";
 import { listAccounts } from "../lib/deriv/rest";
@@ -13,6 +14,7 @@ interface SettingsModalProps {
 
 export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps) {
   const active = getAccountKind();
+  const auth = useAppAuth();
   const [accounts, setAccounts] = useState<OptionsAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -132,6 +134,24 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
           {botRunning ? (
             <p className="modal__warn">Stop the bot before switching accounts.</p>
           ) : null}
+        </section>
+
+        <section className="modal__section">
+          <h3>Session</h3>
+          <p className="modal__note">
+            Signed in as {auth.session?.email ?? "unknown"}. Sign out to require Google and 2FA
+            again.
+          </p>
+          <button
+            type="button"
+            className="auth-screen__submit modal__signout"
+            onClick={() => {
+              auth.signOut();
+              onClose();
+            }}
+          >
+            Sign out
+          </button>
         </section>
       </div>
     </div>

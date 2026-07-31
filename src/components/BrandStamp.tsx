@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { isSoundEnabled, playWinSound, setSoundEnabled } from "../lib/sound";
+import { APP_NAME, APP_SHORT, APP_TAGLINE } from "../lib/brand";
 import logoDark from "../assets/logo.png";
 import logoLight from "../assets/logo-light.png";
 
@@ -28,8 +29,11 @@ export function BrandStamp() {
   const [soundOn, setSoundOn] = useState(() => isSoundEnabled());
 
   return (
-    <div className="brand-stamp" aria-label="Brick Trader notice">
+    <div className="brand-stamp" aria-label={`${APP_NAME} notice`}>
       <div className="brand-stamp__inner">
+        <div className="brand-stamp__mark" aria-hidden="true">
+          <span className="brand-stamp__glyph">{APP_SHORT}</span>
+        </div>
         <img
           src={theme === "light" ? logoLight : logoDark}
           alt=""
@@ -37,7 +41,8 @@ export function BrandStamp() {
         />
         <div className="brand-stamp__body">
           <div className="brand-stamp__head">
-            <strong className="brand-stamp__name">Brick Trader</strong>
+            <strong className="brand-stamp__name">{APP_NAME}</strong>
+            <span className="brand-stamp__badge brand-stamp__badge--secure">Secured</span>
             <span className="brand-stamp__badge">Disclaimer</span>
             <button
               type="button"
@@ -55,10 +60,10 @@ export function BrandStamp() {
               <SpeakerIcon on={soundOn} />
             </button>
           </div>
+          <p className="brand-stamp__tagline">{APP_TAGLINE}</p>
           <p className="brand-stamp__disclaimer">
-            For analysis and education only. Not financial advice. Digit patterns
-            on synthetic indices do not guarantee future results. Trade only with
-            funds you can afford to lose.
+            For analysis and education only. Not financial advice. Digit patterns on synthetic
+            indices do not guarantee future results. Trade only with funds you can afford to lose.
           </p>
         </div>
       </div>

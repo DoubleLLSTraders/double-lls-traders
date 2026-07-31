@@ -1,6 +1,7 @@
 {
-  "name": "mr-nyc",
+  "name": "double-lls-traders",
   "private": true,
+  "description": "Double LLS Traders — secured Deriv Matches / Differs trading desk",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -30,11 +31,16 @@
     "check-beststake": "tsx --env-file=.env scripts/check-beststake.ts"
   },
   "dependencies": {
+    "@react-oauth/google": "^0.13.5",
+    "firebase": "^12.17.0",
+    "otpauth": "^9.5.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",

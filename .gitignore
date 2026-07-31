@@ -1,3 +1,7 @@
+# OAuth / Google client secrets — NEVER commit
+client_secret*.json
+*client_secret*.json
+
 # Secrets — never commit
 .env
 .env.local

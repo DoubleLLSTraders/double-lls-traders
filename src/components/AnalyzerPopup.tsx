@@ -3,6 +3,7 @@ import type { DigitStats } from "../lib/analysis/digits";
 import { buildAiBrief } from "../lib/analysis/explain";
 import {
   confirmScore,
+  isArmedSignal,
   isFullyConfirmed,
   type MarketSignal,
 } from "../lib/analysis/signal";
@@ -110,7 +111,7 @@ export function AnalyzerPopup({
       <div className="analyzer-board">
         <div>
           <span>Confirms</span>
-          <strong className={isFullyConfirmed(signal) ? "is-up" : ""}>
+          <strong className={isArmedSignal(signal) || isFullyConfirmed(signal) ? "is-up" : ""}>
             {score}/5
           </strong>
         </div>
@@ -203,7 +204,7 @@ export function AnalyzerPopup({
       <div className={`analyzer-signal analyzer-signal--${signal.confidence}`}>
         <div className="analyzer-signal__top">
           <em>
-            {score}/5 · {signal.confidence}
+            {score}/5 · {signal.confidence} · power {signal.power}
           </em>
         </div>
         <strong className="analyzer-signal__title">{signal.label}</strong>

@@ -1,32 +1,55 @@
-# Brick Trader
+# Double LLS Traders
 
-Live Deriv Matches / Differs analysis and bot for synthetic indices (Volatility 75 and others).
+**Secured Deriv Matches / Differs trading desk** — live digit analysis, automated Differs bot, AI operator, and institutional-style risk controls.
 
-**Public app (after deploy):** https://munyivaemmanuel-rgb.github.io/brick-trader/
+> **Private platform.** Access is restricted to authorized Google accounts with Google Authenticator (TOTP) and one-time recovery codes stored as SHA-256 hashes in Firebase Firestore.
 
-**Source repo:** https://github.com/munyivaemmanuel-rgb/brick-trader
+**Repository:** [github.com/munyivaemmanuel-rgb/brick-trader](https://github.com/munyivaemmanuel-rgb/brick-trader) (private)
 
-## Setup (local)
+**Hosted app:** https://munyivaemmanuel-rgb.github.io/brick-trader/
 
-1. Register an app on the [Deriv developer dashboard](https://developers.deriv.com/dashboard/). Copy the App ID. Markup must be **0%**. Authorisation scope: **Trade** only.
-2. Create a Personal Access Token on your **Demo** account at [home.deriv.com → profile → API tokens](https://home.deriv.com/dashboard/profile/api-tokens) with **Trade** scope.
-3. Copy the env template and fill it in:
+---
+
+## Security architecture
+
+| Layer | Protection |
+|--------|------------|
+| Identity | Google OAuth — allowlisted emails only |
+| 2FA | Google Authenticator (TOTP, 30s window) |
+| Recovery | 8 cryptographically random one-time codes (SHA-256 hashed in Firestore) |
+| Session | 8-hour TTL, browser fingerprint binding, random session token |
+| Brute force | 5 failed attempts → 15-minute lockout (per device) |
+| Secrets | `.env` gitignored; never commit PATs or OAuth client secrets |
+| Firestore | Rules scoped to `totp_secrets/{email}` for authorized operators only |
+
+See [SECURITY.md](./SECURITY.md) for operator checklist and rotation guidance.
+
+---
+
+## Quick start (local)
+
+1. **Deriv** — [Developer dashboard](https://developers.deriv.com/dashboard/) app ID (0% markup, Trade scope).
+2. **Demo PAT** — [home.deriv.com → API tokens](https://home.deriv.com/dashboard/profile/api-tokens) with Trade scope.
+3. **Google OAuth** — Web client ID with `http://localhost:5173` as authorized origin.
+4. **Firebase** — Firestore enabled; publish `firestore.rules`.
+5. Copy env and fill in:
 
 ```bash
 cp .env.example .env
 ```
 
-Required fields:
+Required:
 
 ```
-VITE_DERIV_APP_ID=...
-VITE_DERIV_TOKEN_DEMO=...
-VITE_DERIV_DEMO_ACCOUNT_ID=DOT...   # from npm run check-auth
+VITE_DERIV_APP_ID=
+VITE_DERIV_TOKEN_DEMO=
+VITE_DERIV_DEMO_ACCOUNT_ID=
+VITE_GOOGLE_CLIENT_ID=
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_APP_ID=
+# + other VITE_FIREBASE_* from Firebase console
 ```
-
-Leave `VITE_DERIV_TOKEN_REAL` empty. Keep `VITE_TRADING_MODE=paper` and `VITE_DERIV_ACCOUNT=demo`.
-
-4. Install and run:
 
 ```bash
 npm install
@@ -34,66 +57,71 @@ npm run check-auth
 npm run dev
 ```
 
-Open http://localhost:5173. You should see your demo balance and a live digit feed.
+Open http://localhost:5173 (or `/brick-trader/` if `GITHUB_PAGES=true`).
 
-## Deploy (GitHub Pages — use on any device)
+First login: Google → scan Authenticator QR → **download recovery codes** → enter 6-digit code.
 
-Every push to `master` builds and publishes the site.
+---
 
-1. Make the repo **public** (Settings → General → Danger zone → Change visibility).
-2. Enable **Pages**: Settings → Pages → Build and deployment → Source: **GitHub Actions**.
-3. Add **Actions secrets** (Settings → Secrets and variables → Actions → New repository secret). Copy values from your local `.env`:
+## Deploy (GitHub Pages)
+
+Workflow: `.github/workflows/deploy-pages.yml` — runs on push to `master`.
+
+Add **Actions secrets** (Settings → Secrets → Actions) mirroring `.env`:
 
 | Secret | Required |
 |--------|----------|
 | `VITE_DERIV_APP_ID` | yes |
 | `VITE_DERIV_TOKEN_DEMO` | yes |
 | `VITE_DERIV_DEMO_ACCOUNT_ID` | recommended |
+| `VITE_GOOGLE_CLIENT_ID` | yes |
+| `VITE_FIREBASE_*` | yes (all Firebase web config vars) |
 | `VITE_TRADING_MODE` | `live` or `paper` |
-| `VITE_DERIV_TOKEN_REAL` | optional |
-| `VITE_DERIV_REAL_ACCOUNT_ID` | optional |
 
-4. Push to `master`. Check **Actions** tab for the deploy workflow, then open:
+> Private repos: GitHub Pages may require a paid plan. Alternatively deploy `dist/` to any static host.
 
-   **https://munyivaemmanuel-rgb.github.io/brick-trader/**
+---
 
-Tokens are baked in at build time (Vite). To rotate keys, update secrets and re-run the workflow.
+## Platform features
 
-## Backtester
+| Module | Description |
+|--------|-------------|
+| Live feed | Deriv Options API — OTP WebSocket + REST |
+| Market scan | Auto-select best volatility index for Differs |
+| Bot | Take-profit runs, bulk contracts, martingale recovery |
+| AI operator | Matches side automation with bankroll tracking |
+| Backtester | Offline tick replay + Monte Carlo |
+| Access gate | Google + TOTP + recovery codes |
 
-Download real ticks (needs `VITE_DERIV_APP_ID` in `.env`):
+---
 
-```bash
-npm run fetch-ticks -- --symbol R_100 --count 50000
-```
-
-Compare strategies (uses `data/R_100.json` if present, otherwise a fair random control):
-
-```bash
-npm run backtest -- --symbol R_100 --payout 9.4
-```
-
-`--payout` is the Matches return multiplier including stake (e.g. 9.4 means a $1 win returns $9.40). Check the live quote on Deriv and pass the real number — the house edge is `payout/10 - 1`.
-
-Engine sanity checks:
+## Scripts
 
 ```bash
-npm run verify-backtest
+npm run dev          # local desk
+npm run build        # production bundle
+npm run check-auth   # verify Deriv PAT
+npm run backtest     # offline strategy replay
+npm run find-edge    # scan indices for payout edge
 ```
 
-## What's in the box
-
-| Piece | Status |
-|---|---|
-| Deriv Options REST + OTP WebSocket client | done |
-| Live digit analysis, bot panel, market scan | done |
-| Demo / real account switcher | done |
-| Live Differs bot (take-profit, bulk contracts) | done |
-| AI Operator (Matches) | done |
-| Offline backtester + Monte Carlo | done |
+---
 
 ## Safety defaults
 
-- Demo account, paper mode, blank real-money token.
-- Daily loss / consecutive-loss / max-stake caps in `.env`.
-- `.env` is gitignored. Never paste tokens into chat or screenshots.
+- Demo account + paper mode recommended for development.
+- Session caps: daily loss, consecutive losses, max stake in `.env`.
+- **Never** paste tokens, recovery codes, or `.env` in chat or screenshots.
+- Rotate Deriv PAT and recovery codes if exposure is suspected.
+
+---
+
+## Brand
+
+**Double LLS Traders** — LLS monogram, neon green `#00ff80` on black. Logo assets in `src/assets/` and `public/icon.svg`.
+
+---
+
+## Disclaimer
+
+For analysis and education only. Not financial advice. Synthetic index digits are uniformly random over time; no strategy guarantees profit. Trade only with funds you can afford to lose.

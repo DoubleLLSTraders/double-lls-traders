@@ -11,6 +11,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { StatusBar } from "./components/StatusBar";
 import { TickChart } from "./components/TickChart";
 import { AiPanel } from "./components/AiPanel";
+import { AuthSignOutButton } from "./components/AuthGate";
 import { LiveTradingBanner } from "./components/LiveTradingBanner";
 import { TradesPanel } from "./components/TradesPanel";
 import { recoveryRequirements } from "./lib/bot/gates";
@@ -42,6 +43,7 @@ import {
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
+import { APP_NAME } from "./lib/brand";
 import {
   AI_TRADE_NOTE,
   applyAiTradePnl,
@@ -57,9 +59,9 @@ const WINDOW_SIZES = [250, 500, 1000, 2000] as const;
  * Telling a genuine 12% digit from 10% noise needs ~865 samples at 95%
  * confidence, so anything shorter mostly confirms randomness.
  */
-const AGREEMENT_WINDOWS = [1000, 2000] as const;
+const AGREEMENT_WINDOWS = [1500, 2000, 2500] as const;
 const BOT_SETTINGS_KEY = "brick-trader-bot-settings";
-const BOT_SETTINGS_VERSION = 26;
+const BOT_SETTINGS_VERSION = 29;
 
 /** Wait for the feed to reload after switching volatility index. */
 async function waitForSymbolFeed(
@@ -207,8 +209,8 @@ function BrandMark() {
         className="topbar__logo"
       />
       <div className="topbar__brand-copy">
-        <strong>Brick Trader</strong>
-        <small>Matches · Differs</small>
+        <strong>{APP_NAME}</strong>
+        <small>Matches · Differs · Secured desk</small>
       </div>
     </div>
   );
@@ -255,6 +257,11 @@ export default function App() {
   const scanActiveRef = useRef(false);
   /** Synchronous Stop latch — blocks new entries before React re-renders running=false. */
   const botHaltRef = useRef(true);
+  /**
+   * Mid-run market switch latch. While true the bot must not open new trades —
+   * the analyzer is still scanning, or the new feed has not loaded yet.
+   */
+  const switchHoldRef = useRef(false);
 
   useEffect(() => {
     saveBotSettings(bot);
@@ -362,17 +369,33 @@ export default function App() {
 
   /** Pick the best payout-tier market for the current side preference. */
   const autoPickMarket = useCallback(
-    async (note?: string) => {
+    async (note?: string, opts?: { excludeCurrent?: boolean; preferReady?: boolean }) => {
       if (!feed.client || feed.state !== "ready") return null;
       if (marketSwitchBusy.current) return null;
       marketSwitchBusy.current = true;
       try {
-        const best = await findBestMarket(feed.client, scanBotSettings(), symbol);
+        const best = await findBestMarket(
+          feed.client,
+          scanBotSettings(),
+          symbol,
+          {
+            excludeSymbols: opts?.excludeCurrent ? [symbol] : undefined,
+            preferReady: opts?.preferReady ?? false,
+          },
+        );
         if (best.symbol !== symbol) {
           setSymbol(best.symbol);
+          setBot((current) => ({
+            ...current,
+            side: current.autoSide ? best.signal.side : current.side,
+            prediction: best.signal.digit,
+            autoFollow: true,
+          }));
           setTimerNote(
             note ?? `Auto · ${best.name} · ${best.signal.label}`,
           );
+        } else if (note) {
+          setTimerNote(note);
         }
         return best;
       } finally {
@@ -380,6 +403,123 @@ export default function App() {
       }
     },
     [feed.client, feed.state, scanBotSettings, symbol],
+  );
+
+  /**
+   * Mid-run switch after a loss or a stuck cold-gap wait.
+   *
+   * Analyzes every index first, only accepts a market that is already
+   * trade-ready, waits for the live feed to load, then re-checks the live
+   * signal. If nothing qualifies — or the live feed still looks bad — the
+   * run stops instead of jumping onto a blind pick.
+   */
+  const switchToAnalyzedMarket = useCallback(
+    async (reason: string) => {
+      if (!feed.client || feed.state !== "ready") {
+        botHaltRef.current = true;
+        setBot((current) => ({ ...current, running: false }));
+        setTimerNote(`${reason} · feed not ready · stopped`);
+        return;
+      }
+      if (marketSwitchBusy.current) return;
+      marketSwitchBusy.current = true;
+      switchHoldRef.current = true;
+      setScanningMarket(true);
+      setTimerNote(`${reason} · analyzing all markets…`);
+
+      try {
+        const best = await findBestMarket(
+          feed.client,
+          scanBotSettings(),
+          symbol,
+          {
+            excludeSymbols: [symbol],
+            requireReady: true,
+          },
+        );
+
+        if (!best) {
+          botHaltRef.current = true;
+          setBot((current) => ({ ...current, running: false }));
+          setTimerNote(
+            `${reason} · no ready market · stopped (nothing cleared cold gap + barrier)`,
+          );
+          return;
+        }
+
+        setTimerNote(
+          `Analyzed · ${best.name} · ${best.signal.label} · loading ticks…`,
+        );
+        setSymbol(best.symbol);
+        setBot((current) => ({
+          ...current,
+          side: current.autoSide ? best.signal.side : current.side,
+          prediction: best.signal.digit,
+          autoFollow: true,
+        }));
+
+        const feedReady = await waitForSymbolFeed(
+          best.symbol,
+          Math.max(500, bot.minSample),
+          () => feedSnapshotRef.current,
+          () => botHaltRef.current,
+          25000,
+        );
+
+        if (botHaltRef.current) return;
+
+        if (!feedReady) {
+          botHaltRef.current = true;
+          setBot((current) => ({ ...current, running: false }));
+          setTimerNote(
+            `${best.name} · feed did not load in time · stopped`,
+          );
+          return;
+        }
+
+        // Re-read the live analyzer on the new feed. Scan history and the
+        // live stream can disagree by a few ticks — if the live setup is no
+        // longer ready, stop rather than trade blind.
+        const live = signalRef.current;
+        const prefs = scanBotSettings().sidePreference;
+        const liveReady =
+          live.timingOk &&
+          live.barrierAligned &&
+          (prefs === "matches"
+            ? live.side === "DIGITMATCH"
+            : prefs === "differs" || prefs === "winrate"
+              ? live.side === "DIGITDIFF" && live.coldMarginOk
+              : true);
+
+        if (!liveReady) {
+          botHaltRef.current = true;
+          setBot((current) => ({ ...current, running: false }));
+          setTimerNote(
+            `${best.name} · live setup went cold after load · stopped`,
+          );
+          return;
+        }
+
+        setBot((current) => ({
+          ...current,
+          side: current.autoSide ? live.side : current.side,
+          prediction: live.digit,
+          autoFollow: true,
+        }));
+        setTimerNote(
+          `Ready · ${best.name} · ${live.label} · trading resumes`,
+        );
+      } catch {
+        botHaltRef.current = true;
+        setBot((current) => ({ ...current, running: false }));
+        setTimerNote(`${reason} · market scan failed · stopped`);
+      } finally {
+        switchHoldRef.current = false;
+        setScanningMarket(false);
+        marketSwitchBusy.current = false;
+      }
+    },
+    [feed.client, feed.state, scanBotSettings, symbol, bot.minSample],
   );
 
   const enterTradeFromSignal = useCallback(() => {
@@ -455,11 +595,16 @@ export default function App() {
     onSettings: (next) => setBot((current) => ({ ...current, ...next })),
     onStop: (reason) => {
       botHaltRef.current = true;
+      switchHoldRef.current = false;
       setBot((current) => ({ ...current, running: false }));
       arm.cancel();
       setTimerNote(reason);
     },
+    onSwitchMarket: (reason) => {
+      void switchToAnalyzedMarket(reason);
+    },
     haltRef: botHaltRef,
+    switchHoldRef,
     isVirtual: isVirtualAccount,
     tradeNote: aiBankroll.armed ? AI_TRADE_NOTE : null,
   });
@@ -795,6 +940,7 @@ export default function App() {
           >
             {feed.account?.isVirtual === false ? "Live" : "Demo"}
           </button>
+          <AuthSignOutButton />
         </div>
       </header>
 
