@@ -103,15 +103,28 @@ async function fetchDigits(
   client: DerivClient,
   symbol: string,
 ): Promise<number[]> {
-  const message = await client.send<HistoryResponse>({
-    ticks_history: symbol,
-    adjust_start_time: 1,
-    count: SCAN_COUNT,
-    end: "latest",
-    style: "ticks",
-  });
-  const { prices } = message.history;
-  const pipSize = message.pip_size;
+  // Deriv often caps a single ticks_history reply well below SCAN_COUNT —
+  // page backwards until we have enough for the primary window.
+  const prices: number[] = [];
+  let pipSize = 2;
+  let end: number | "latest" = "latest";
+  const page = 1000;
+  while (prices.length < SCAN_COUNT) {
+    const message: HistoryResponse = await client.send<HistoryResponse>({
+      ticks_history: symbol,
+      adjust_start_time: 1,
+      count: page,
+      end,
+      style: "ticks",
+    });
+    const times: number[] = message.history?.times ?? [];
+    if (times.length === 0) break;
+    pipSize = message.pip_size ?? pipSize;
+    prices.unshift(...message.history.prices);
+    const earliest: number = times[0]!;
+    if (end !== "latest" && earliest >= end) break;
+    end = earliest - 1;
+  }
   return prices.map((quote) => lastDigit(quote, pipSize));
 }
 
