@@ -18,7 +18,7 @@ import {
   hasRecoveryCodes,
   hasTotpConfigured,
 } from "../lib/auth/totpRemote";
-import type { TotpRecord } from "../lib/auth/store";
+import { grantLiveAccess, LIVE_ACCESS_TTL_MS, type TotpRecord } from "../lib/auth/store";
 import { config, type AccountKind } from "../lib/config";
 import { listAccounts } from "../lib/deriv/rest";
 import type { OptionsAccount } from "../lib/deriv/types";
@@ -165,7 +165,10 @@ export function SettingsModal({ open, onClose, botRunning }: SettingsModalProps)
   }
 
   function confirmLiveSwitch() {
-    setAccountKind("real");
+    grantLiveAccess();
+    if (!setAccountKind("real")) {
+      return;
+    }
     setLiveVerifyOpen(false);
     onClose();
   }
@@ -425,7 +428,10 @@ function SecurityPanel({
             <dt>Live account switch</dt>
             <dd>
               <span className="settings-badge settings-badge--ok">Authenticator required</span>
-              <small> · Demo → Live in Settings</small>
+              <small>
+                {" "}
+                · re-verify every {Math.round(LIVE_ACCESS_TTL_MS / 60_000)} min
+              </small>
             </dd>
           </div>
           <div className="settings-kv__row">
@@ -624,7 +630,13 @@ function LiveSwitchVerify({
 
     setBusy(true);
     try {
-      if (!verifyTotpCode(secret, code)) {
+      let activeSecret = secret;
+      if (email) {
+        const fresh = await fetchTotpRecord(email);
+        if (fresh?.secret) activeSecret = fresh.secret;
+      }
+
+      if (!verifyTotpCode(activeSecret, code)) {
         const failed = recordAuthFailure(email);
         if (failed.locked && failed.until) {
           setError(lockoutMessage(failed.until));

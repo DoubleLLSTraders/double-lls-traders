@@ -1,15 +1,31 @@
+import { clearLiveAccess, hasLiveAccess } from "./auth/store";
 import { config, type AccountKind } from "./config";
+import { storageKey } from "./platform";
 
 /**
  * Which Deriv account the app is pointed at right now.
  *
  * .env sets the starting value, but the settings modal can move between demo
- * and real without a rebuild, so the live choice lives here and the feed
- * reconnects whenever it changes.
+ * and real without a rebuild. Live requires recent Authenticator verification.
  */
-const KEY = "mrnyc.account-kind";
+const KEY = storageKey("account-kind");
+const LEGACY_KEY = "mrnyc.account-kind";
+
+function migrateLegacyKey(): void {
+  try {
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (legacy !== "demo" && legacy !== "real") return;
+    if (localStorage.getItem(KEY) === null) {
+      localStorage.setItem(KEY, legacy);
+    }
+    localStorage.removeItem(LEGACY_KEY);
+  } catch {
+    // private mode
+  }
+}
 
 function read(): AccountKind {
+  migrateLegacyKey();
   try {
     const raw = localStorage.getItem(KEY);
     if (raw === "demo" || raw === "real") return raw;
@@ -20,19 +36,55 @@ function read(): AccountKind {
 }
 
 let current: AccountKind = read();
+
+/** Real account without 2FA must not persist — force demo on load. */
+if (current === "real" && !hasLiveAccess()) {
+  current = "demo";
+  try {
+    localStorage.setItem(KEY, "demo");
+  } catch {
+    // ignore
+  }
+}
+
 const listeners = new Set<() => void>();
 
 export function getAccountKind(): AccountKind {
+  if (current === "real" && !hasLiveAccess()) {
+    return "demo";
+  }
   return current;
 }
 
-export function setAccountKind(kind: AccountKind): void {
-  if (kind === current) return;
+export function setAccountKind(kind: AccountKind): boolean {
+  if (kind === current) return true;
+
+  if (kind === "real" && !hasLiveAccess()) {
+    return false;
+  }
+
+  if (kind === "demo") {
+    clearLiveAccess();
+  }
+
   current = kind;
   try {
     localStorage.setItem(KEY, kind);
   } catch {
     // Losing persistence is survivable; the session still switches.
+  }
+  for (const listener of listeners) listener();
+  return true;
+}
+
+export function enforceLiveAccessPolicy(): void {
+  if (current !== "real" || hasLiveAccess()) return;
+  current = "demo";
+  clearLiveAccess();
+  try {
+    localStorage.setItem(KEY, "demo");
+  } catch {
+    // ignore
   }
   for (const listener of listeners) listener();
 }

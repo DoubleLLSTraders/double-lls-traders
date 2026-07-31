@@ -53,11 +53,33 @@ service cloud.firestore {
     }
 
     // Double LLS Traders — TOTP + recovery (hashed codes in Firestore)
+    // Requires Firebase Auth (Google) — email in doc id must match signed-in user.
+    function allowedOperatorEmail() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'munyivaemmanuel@gmail.com',
+          'josephokero074@gmail.com'
+        ];
+    }
+
+    function validTotpRecord() {
+      let d = request.resource.data;
+      return d.secret is string
+        && d.secret.size() >= 16
+        && d.secret.size() <= 128
+        && d.setupAt is number
+        && (!('backupCodeHashes' in d) || d.backupCodeHashes is list);
+    }
+
     match /totp_secrets/{email} {
-      allow read, write: if email in [
-        'munyivaemmanuel@gmail.com',
-        'josephokero074@gmail.com',
-      ];
+      allow read: if allowedOperatorEmail()
+        && request.auth.token.email == email;
+
+      allow create, update: if allowedOperatorEmail()
+        && request.auth.token.email == email
+        && validTotpRecord();
+
+      allow delete: if false;
     }
 
     // Auth profile mirror (server-written)

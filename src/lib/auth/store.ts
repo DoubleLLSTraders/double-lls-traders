@@ -1,6 +1,9 @@
 import { AUTH_SESSION_KEY, SESSION_TTL_MS } from "./constants";
 import { createSessionToken, sessionFingerprint } from "./security";
 
+/** How long demo→live access lasts after Authenticator verification. */
+export const LIVE_ACCESS_TTL_MS = 30 * 60 * 1000;
+
 export interface AuthSession {
   email: string;
   name: string;
@@ -11,6 +14,8 @@ export interface AuthSession {
   token: string;
   /** Browser fingerprint at sign-in — blocks simple session copy. */
   fingerprint: string;
+  /** Set after Authenticator confirms a switch to Live trading. */
+  liveVerifiedAt?: number;
 }
 
 /** Stored in Firebase — kept here for typing only. */
@@ -71,4 +76,25 @@ export function clearSession(): void {
   } catch {
     // ignore
   }
+}
+
+export function grantLiveAccess(): AuthSession | null {
+  const session = readSession();
+  if (!session) return null;
+  const next: AuthSession = { ...session, liveVerifiedAt: Date.now() };
+  writeJson(AUTH_SESSION_KEY, next);
+  return next;
+}
+
+export function hasLiveAccess(): boolean {
+  const session = readSession();
+  if (!session?.liveVerifiedAt) return false;
+  return Date.now() < session.liveVerifiedAt + LIVE_ACCESS_TTL_MS;
+}
+
+export function clearLiveAccess(): void {
+  const session = readSession();
+  if (!session?.liveVerifiedAt) return;
+  const { liveVerifiedAt: _removed, ...rest } = session;
+  writeJson(AUTH_SESSION_KEY, rest);
 }

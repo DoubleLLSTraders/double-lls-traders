@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { enforceLiveAccessPolicy, setAccountKind } from "../lib/accountMode";
 import { generateBackupCodes, isBackupCodeInput } from "../lib/auth/backupCodes";
 import {
+  clearLiveAccess,
   clearSession,
   readSession,
   writeSession,
@@ -20,6 +22,12 @@ import {
   saveTotpRecordRemote,
 } from "../lib/auth/totpRemote";
 import { isFirebaseConfigured } from "../lib/firebase/config";
+import {
+  firebaseMatchesEmail,
+  signInFirebaseWithGoogle,
+  signOutFirebase,
+  waitForFirebaseAuth,
+} from "../lib/firebase/auth";
 import {
   clearAuthFailures,
   isAuthLocked,
@@ -79,17 +87,47 @@ export function useAppAuthState(): AppAuth {
   const [storedTotpSecret, setStoredTotpSecret] = useState<string | null>(null);
 
   useEffect(() => {
-    const existing = readSession();
-    if (existing) {
-      setSession(existing);
-      setPhase("authenticated");
-      return;
-    }
-    setPhase("sign-in");
+    let cancelled = false;
+
+    void (async () => {
+      const firebaseUser = await waitForFirebaseAuth();
+      if (cancelled) return;
+
+      const existing = readSession();
+      if (
+        existing &&
+        firebaseUser?.email &&
+        firebaseMatchesEmail(existing.email)
+      ) {
+        setSession(existing);
+        setPhase("authenticated");
+        return;
+      }
+
+      if (existing) {
+        clearSession();
+        clearLiveAccess();
+      }
+      if (firebaseUser) {
+        try {
+          await signOutFirebase();
+        } catch {
+          // ignore
+        }
+      }
+      setPhase("sign-in");
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const signOut = useCallback(() => {
+    void signOutFirebase();
     clearSession();
+    clearLiveAccess();
+    setAccountKind("demo");
     setSession(null);
     setPendingProfile(null);
     setSetupSecret(null);
@@ -103,6 +141,19 @@ export function useAppAuthState(): AppAuth {
     setBusy(false);
     setPhase("sign-in");
   }, []);
+
+  useEffect(() => {
+    if (phase !== "authenticated" || !session) return;
+
+    const interval = window.setInterval(() => {
+      enforceLiveAccessPolicy();
+      if (!firebaseMatchesEmail(session.email)) {
+        signOut();
+      }
+    }, 60_000);
+
+    return () => window.clearInterval(interval);
+  }, [phase, session, signOut]);
 
   const finishAuth = useCallback((profile: GoogleProfile) => {
     const next = writeSession(profile);
@@ -144,6 +195,8 @@ export function useAppAuthState(): AppAuth {
           setPhase("sign-in");
           return;
         }
+
+        await signInFirebaseWithGoogle(credential);
 
         setPendingProfile(profile);
         let remote = await fetchTotpRecord(profile.email);

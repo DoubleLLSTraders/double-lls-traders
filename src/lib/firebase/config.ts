@@ -37,13 +37,18 @@ export function isFirebaseConfigured(): boolean {
   return readFirebaseConfig() !== null;
 }
 
-export function getFirestoreDb(): Firestore {
-  if (db) return db;
+export function getFirebaseApp(): FirebaseApp {
+  if (app) return app;
   const config = readFirebaseConfig();
   if (!config) {
     throw new Error("Firebase is not configured. Add VITE_FIREBASE_* values to .env.");
   }
-  app ??= initializeApp(config);
-  db = getFirestore(app);
+  app = initializeApp(config);
+  return app;
+}
+
+export function getFirestoreDb(): Firestore {
+  if (db) return db;
+  db = getFirestore(getFirebaseApp());
   return db;
 }
