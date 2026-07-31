@@ -21,6 +21,8 @@
     "check-coldpick": "tsx --env-file=.env scripts/check-coldpick.ts",
     "check-exit": "tsx --env-file=.env scripts/check-exit.ts",
     "diagnose-gate": "tsx --env-file=.env scripts/diagnose-gate.ts",
+    "probe-elite": "tsx --env-file=.env scripts/probe-elite.ts",
+    "calibrate-elite": "tsx --env-file=.env scripts/calibrate-elite.ts",
     "run-bot": "tsx --env-file=.env scripts/run-bot.ts",
     "fetch-ticks": "tsx --env-file=.env scripts/fetch-ticks.ts",
     "backtest": "tsx scripts/backtest.ts",

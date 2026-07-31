@@ -24,9 +24,9 @@ const SCAN_MARKETS = [
   { symbol: "R_75", name: "Volatility 75 Index" },
 ] as const;
 
-const SCAN_COUNT = 3000;
-const WINDOW_SIZES = [1500, 2000, 2500] as const;
-/** Primary window for ranking — matches elite sample floor. */
+const SCAN_COUNT = 2500;
+const WINDOW_SIZES = [1000, 1500, 2000] as const;
+/** Primary window for ranking — matches calibrated sample floor. */
 const PRIMARY_WINDOW = 1500;
 
 export interface MarketScanResult {

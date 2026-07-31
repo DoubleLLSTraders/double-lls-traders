@@ -60,9 +60,9 @@ const WINDOW_SIZES = [250, 500, 1000, 2000] as const;
  * Telling a genuine 12% digit from 10% noise needs ~865 samples at 95%
  * confidence, so anything shorter mostly confirms randomness.
  */
-const AGREEMENT_WINDOWS = [1500, 2000, 2500] as const;
+const AGREEMENT_WINDOWS = [1000, 1500, 2000] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
-const BOT_SETTINGS_VERSION = 29;
+const BOT_SETTINGS_VERSION = 30;
 
 /** Wait for the feed to reload after switching volatility index. */
 async function waitForSymbolFeed(

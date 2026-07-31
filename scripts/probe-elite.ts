@@ -30,7 +30,7 @@ const SYMBOL = process.env.PROBE_SYMBOL?.trim() || "R_75";
 const SAMPLE = Number(process.env.PROBE_SAMPLE ?? "8000");
 const PAGE = 1000;
 const PRIMARY = 1500;
-const WINDOWS = [1500, 2000, 2500] as const;
+const WINDOWS = [1000, 1500, 2000] as const;
 
 const settings: BotSettings = {
   prediction: 0,

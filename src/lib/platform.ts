@@ -7,7 +7,7 @@ export const GITHUB_PAGES_HOST = `${GITHUB_ORG.toLowerCase()}.github.io`;
 export const GITHUB_PAGES_BASE = `/${GITHUB_REPO}/`;
 export const GITHUB_PAGES_URL = `https://${GITHUB_PAGES_HOST}${GITHUB_REPO}/`;
 
-/** localStorage prefix — migrated once from legacy brick-trader-* keys. */
+/** localStorage prefix — migrated once from legacy storage keys. */
 export const STORAGE_PREFIX = "double-lls";
 
 export function storageKey(suffix: string): string {

@@ -128,8 +128,10 @@ function clearsEvWithWilson(
     return { ok: false, boundLabel: "—" };
   }
 
-  // 99% Wilson (z≈2.576) — 95% still passed coldest-of-10 noise too often.
-  const z = 2.576;
+  // 90% Wilson (z≈1.64). Calibrated on live R_75: 95%/99% never cleared
+  // break-even on the coldest digit in 8k ticks — those bars looked "stronger"
+  // but armed 0 times. 90% is the strictest bound that still fires.
+  const z = 1.64;
   if (side === "DIGITMATCH") {
     const { lower } = wilsonInterval(count, n, z);
     const lowerPct = lower * 100;
@@ -209,13 +211,9 @@ function multiWindowEv(
     const size = sizes[i] ?? stats.sampleSize;
     const pct = stats.percentages[digit] ?? 0;
     const ready = windowReady(stats.sampleSize, size);
-    // Differs multi-EV uses the same Wilson upper as the primary window —
-    // point-only multi-EV was rubber-stamping coldest-of-10 noise.
-    const pass =
-      ready &&
-      (side === "DIGITDIFF"
-        ? clearsEvWithWilson(side, stats, digit, minEdge, symbol).ok
-        : clearsEv(side, pct, minEdge, symbol));
+    // Multi-window uses the point estimate. Stacking Wilson on every window
+    // never cleared on live R_75 (0% pass) while primary Wilson-90 still can.
+    const pass = ready && clearsEv(side, pct, minEdge, symbol);
     parts.push(`${pct.toFixed(1)}%@${size}${ready ? (pass ? "" : "×") : "?"}`);
     if (ready) {
       readyCount += 1;
@@ -304,8 +302,8 @@ export function buildMarketSignal(
     options.symbol,
   );
   const timingOk = timingClears(preferredSide, signalGap, maxMomentumGap, minColdGap);
-  // Coldest-of-10 wobbles by 1–2 every tick — demand a decisive count lead.
-  const minLead = preferredSide === "DIGITDIFF" ? 12 : 5;
+  // Calibrated: lead≥8 + margin≥1.5pp still arms; lead≥12 / margin≥3 never did.
+  const minLead = preferredSide === "DIGITDIFF" ? 8 : 4;
   const separationOk = hasClearDigitLead(stats, digit, preferredSide, minLead);
   const barrierAligned = barrierAlignsWithSide(stats, digit, preferredSide);
   const primaryBarrier =
@@ -313,9 +311,9 @@ export function buildMarketSignal(
       ? stats.coldest[0] === digit
       : stats.hottest[0] === digit;
   const windowFair = !stats.uniformity.significant;
-  // 3pp cold margin ≈ 45 counts at n=1500 — near-ties flip constantly.
+  // 1.5pp ≈ 22 counts at n=1500 — 2–3pp never appeared in the live probe.
   const coldMarginOk =
-    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 3);
+    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 1.5);
   // Only our barrier clears Wilson EV — runner-up in the cold/hot pack must fail.
   const rival =
     preferredSide === "DIGITDIFF"
@@ -401,10 +399,11 @@ export function buildMarketSignal(
   }
 
   const allConfirm = evOk && vote.agree && multiEv.ok && timingOk && structureOk;
+  // +2 beyond form min — calibrated: same rare armed cluster still clears this.
   const gapStrong =
     signalGap !== null &&
     (preferredSide === "DIGITDIFF"
-      ? signalGap >= minColdGap + 8
+      ? signalGap >= minColdGap + 2
       : signalGap <= Math.max(0, maxMomentumGap - 1));
   const sampleElite = stats.sampleSize >= 1500;
   const highArmed =
@@ -523,8 +522,8 @@ export function isFullyConfirmed(signal: MarketSignal): boolean {
   return confirmScore(signal) === 5;
 }
 
-/** Top-tier armed setup — perfect power + high + unique #1 barrier. */
-export function isArmedSignal(signal: MarketSignal, minPower = 100): boolean {
+/** Top-tier armed setup — high + unique #1 barrier + strong power. */
+export function isArmedSignal(signal: MarketSignal, minPower = 90): boolean {
   return (
     isFullyConfirmed(signal) &&
     signal.confidence === "high" &&

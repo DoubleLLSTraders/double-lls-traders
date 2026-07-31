@@ -1,9 +1,9 @@
 /**
  * Deep pre-flight before any order fires (first entry and follow-ups).
  *
- * Refuses anything short of a perfect armed setup. After a Differs win the same
- * cold digit stays absent — re-backing it is a correlated bet. Caller stops on
- * refusal (follow-ups) or waits (first entry).
+ * Thresholds are calibrated against live R_75 ticks (scripts/calibrate-elite.ts):
+ * Wilson-90 + gap≥14 + lead≥8 + margin≥1.5pp still arms; tighter stacks did not.
+ * Caller stops on refusal (follow-ups) or waits (first entry).
  */
 import { breakEvenDigitPercent, isLowPayoutSymbol } from "./performance";
 import {
@@ -28,10 +28,11 @@ export interface DeepNextContext {
   firstEntry?: boolean;
 }
 
-const GAP_BUFFER = 8;
-const MIN_COLD_PP_LEAD = 3;
-const MIN_EV_CUSHION_PP = 2;
-const MIN_POWER = 100;
+/** Extra cold-gap ticks beyond the form minimum (calibrated: +2 still fires). */
+const GAP_BUFFER = 2;
+/** Point-estimate cushion under break-even (pp). */
+const MIN_EV_CUSHION_PP = 0.2;
+const MIN_POWER = 90;
 /** One armed trade then bank — never press. */
 export const MAX_WINS_BEFORE_BANK = 1;
 
@@ -163,10 +164,12 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
   const leadMatch = /cold −(\d+)/.exec(sep);
   if (signal.side === "DIGITDIFF" && leadMatch) {
     const lead = Number(leadMatch[1]);
-    if (lead < Math.ceil((MIN_COLD_PP_LEAD / 100) * signal.watching.sampleSize)) {
+    // Absolute lead floor matches signal.ts / calibrate-elite (lead ≥ 8).
+    // A pp×n floor (~23 at n=1500) was stricter than the live-calibrated bar.
+    if (lead < 8) {
       return {
         ok: false,
-        reason: `Deep · cold lead only ${lead} ticks · get out`,
+        reason: `Deep · cold lead only ${lead} ticks (need 8) · get out`,
       };
     }
   }
@@ -194,12 +197,12 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
   if (!isArmedSignal(signal, MIN_POWER)) {
     return {
       ok: false,
-      reason: `Deep · confirms ${score}/5 · confidence ${signal.confidence} · power ${signal.power}/100 · get out`,
+      reason: `Deep · confirms ${score}/5 · confidence ${signal.confidence} · power ${signal.power} · get out`,
     };
   }
 
   return {
     ok: true,
-    summary: `Deep clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power 100 · high`,
+    summary: `Deep clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power} · high`,
   };
 }

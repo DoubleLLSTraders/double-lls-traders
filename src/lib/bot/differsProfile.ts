@@ -9,17 +9,21 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs maximum-confidence profile — fire only on perfect analyzer power.
- * 99% Wilson, unique #1 cold EV, 1500-tick sample, bank after 1 win.
+ * Differs calibrated-confidence profile (v8).
+ *
+ * scripts/calibrate-elite.ts + scripts/probe-elite.ts on live R_75 showed the
+ * previous v7 bar (Wilson 99%, margin 3pp, edge 0.8) armed **0 times** in 8k
+ * ticks. Strongest bar that still fired: Wilson 90%, edge 0, cold gap ≥14,
+ * lead ≥8, margin ≥1.5pp, unique EV, window agree — ~8 armed / ~25min wait.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 7;
+export const DIFFERS_FAST_PROFILE_VERSION = 8;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {
   armSeconds: 0,
   martingale: false,
   minSample: 1500,
-  minEdgePercent: 0.8,
+  minEdgePercent: 0,
   skipLowConfidence: true,
   requireFullConfirm: true,
   requireMultiWindow: true,
@@ -27,20 +31,20 @@ export const DIFFERS_FAST_GATES = {
   requireTiming: true,
   requireUneven: true,
   minColdGap: 14,
-  maxMomentumGap: 1,
+  maxMomentumGap: 2,
   pauseIfBelowBreakEvenAfter: 0,
   pauseIfExpectancyNegativeAfter: 0,
   maxDrawdownPercent: 0,
-  maxTradesPerHour: 3,
+  maxTradesPerHour: 4,
   cooldownTicks: 0,
   parallelExecution: true,
 } satisfies Partial<BotSettings>;
 
 export const LIVE_DIFFERS_QUALITY_GATES = {
   ...DIFFERS_FAST_GATES,
-  minSample: 1800,
-  minColdGap: 16,
-  maxTradesPerHour: 2,
+  minSample: 1500,
+  minColdGap: 14,
+  maxTradesPerHour: 3,
 } satisfies Partial<BotSettings>;
 
 const TYPICAL_DIFF_PAYOUT = 1.0965;
