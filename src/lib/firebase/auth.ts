@@ -48,3 +48,20 @@ export function firebaseMatchesEmail(email: string): boolean {
   const current = getFirebaseUserEmail();
   return current !== null && current === email.trim().toLowerCase();
 }
+
+/** Turn Firebase Auth errors into operator-facing setup hints. */
+export function explainFirebaseAuthError(error: unknown): string {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (
+    msg.includes("auth/invalid-credential") ||
+    msg.includes("not authorized to be used in the project") ||
+    msg.includes("Invalid Idp Response")
+  ) {
+    return (
+      "Google OAuth client does not match your Firebase project. " +
+      "In Firebase Console → Authentication → Sign-in method → Google: enable Google, copy the Web client ID shown there, " +
+      "paste it into VITE_GOOGLE_CLIENT_ID in .env, restart the dev server, and add http://localhost:5173 to that client's authorized origins."
+    );
+  }
+  return msg || "Google sign-in failed.";
+}

@@ -64,7 +64,12 @@ function AuthConfigNotice() {
         </p>
         <ul className="auth-screen__list">
           <li>
-            <code>VITE_GOOGLE_CLIENT_ID</code> — OAuth Web client (Google Cloud Console).
+            <code>VITE_GOOGLE_CLIENT_ID</code> — OAuth Web client from the{" "}
+            <strong>same Firebase / Google Cloud project</strong> (Authentication → Google → Web client
+            ID). Must match <code>VITE_FIREBASE_PROJECT_ID</code>.
+          </li>
+          <li>
+            Firebase Console → Authentication → Sign-in method → <strong>enable Google</strong>.
           </li>
           <li>
             <code>VITE_FIREBASE_API_KEY</code>, <code>VITE_FIREBASE_PROJECT_ID</code>,{" "}

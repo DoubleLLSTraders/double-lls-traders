@@ -27,6 +27,7 @@ import {
   signInFirebaseWithGoogle,
   signOutFirebase,
   waitForFirebaseAuth,
+  explainFirebaseAuthError,
 } from "../lib/firebase/auth";
 import {
   clearAuthFailures,
@@ -233,7 +234,12 @@ export function useAppAuthState(): AppAuth {
 
         beginTotpSetup(profile.email);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Google sign-in failed.");
+        try {
+          await signOutFirebase();
+        } catch {
+          // ignore
+        }
+        setError(explainFirebaseAuthError(caught));
         setPhase("sign-in");
       } finally {
         setBusy(false);
