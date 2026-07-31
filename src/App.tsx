@@ -40,6 +40,7 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { config, isConfigured } from "./lib/config";
+import { publicAsset } from "./lib/publicAsset";
 import {
   AI_TRADE_NOTE,
   applyAiTradePnl,
@@ -200,7 +201,7 @@ function BrandMark() {
   return (
     <div className="topbar__brand">
       <img
-        src={theme === "light" ? "/logo-light.png" : "/logo.png"}
+        src={publicAsset(theme === "light" ? "logo-light.png" : "logo.png")}
         alt=""
         className="topbar__logo"
       />
