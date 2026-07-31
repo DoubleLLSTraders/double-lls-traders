@@ -11,7 +11,7 @@ export interface FirebasePublicConfig {
   measurementId?: string;
 }
 
-function readFirebaseConfig(): FirebasePublicConfig | null {
+export function readFirebaseConfig(): FirebasePublicConfig | null {
   const env = import.meta.env;
   const apiKey = (env.VITE_FIREBASE_API_KEY ?? "").trim();
   const projectId = (env.VITE_FIREBASE_PROJECT_ID ?? "").trim();

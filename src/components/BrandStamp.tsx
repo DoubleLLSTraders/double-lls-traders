@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { isSoundEnabled, playWinSound, setSoundEnabled } from "../lib/sound";
-import { APP_NAME, APP_SHORT, APP_TAGLINE } from "../lib/brand";
+import { APP_NAME, APP_TAGLINE } from "../lib/brand";
 import logoDark from "../assets/logo.png";
 import logoLight from "../assets/logo-light.png";
 
@@ -31,9 +31,6 @@ export function BrandStamp() {
   return (
     <div className="brand-stamp" aria-label={`${APP_NAME} notice`}>
       <div className="brand-stamp__inner">
-        <div className="brand-stamp__mark" aria-hidden="true">
-          <span className="brand-stamp__glyph">{APP_SHORT}</span>
-        </div>
         <img
           src={theme === "light" ? logoLight : logoDark}
           alt=""

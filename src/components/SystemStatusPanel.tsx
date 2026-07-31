@@ -2,16 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 import type { ConnectionState } from "../lib/deriv/types";
 import {
   runPlatformHealthChecks,
+  startStatusRecorder,
   type HealthLevel,
   type PlatformHealthReport,
 } from "../lib/platformStatus";
 import { APP_NAME } from "../lib/brand";
-import { GITHUB_PAGES_URL } from "../lib/platform";
+import { GITHUB_PAGES_URL, GITHUB_REPO_URL } from "../lib/platform";
 
 interface SystemStatusPanelProps {
   feedState: ConnectionState;
   feedError: string | null;
   email: string | null;
+  active: boolean;
 }
 
 function barClass(level: HealthLevel): string {
@@ -28,7 +30,7 @@ function formatChecked(ms: number): string {
   }).format(ms);
 }
 
-export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusPanelProps) {
+export function SystemStatusPanel({ feedState, feedError, email, active }: SystemStatusPanelProps) {
   const [report, setReport] = useState<PlatformHealthReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +49,35 @@ export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusP
   }, [email, feedError, feedState]);
 
   useEffect(() => {
+    if (!active) return;
     void refresh();
-  }, [refresh]);
+  }, [active, refresh]);
+
+  useEffect(() => {
+    if (!active) return;
+    return startStatusRecorder(() => ({ feedState, feedError, email }), 5 * 60_000);
+  }, [active, email, feedError, feedState]);
+
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setInterval(() => void refresh(), 15_000);
+    return () => window.clearInterval(id);
+  }, [active, refresh]);
+
+  useEffect(() => {
+    if (!active) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [active, refresh]);
+
+  useEffect(() => {
+    if (!active) return;
+    const id = window.setTimeout(() => void refresh(), 1_500);
+    return () => window.clearTimeout(id);
+  }, [active, feedError, feedState, refresh]);
 
   const overall = report?.overall ?? "unknown";
 
@@ -57,10 +86,10 @@ export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusP
       <header className="system-status__head">
         <div>
           <h3>{APP_NAME} status</h3>
-          <p>Live health on this browser · history stored locally</p>
+          <p>Live probes every 15s · instant on feed change · history from real checks</p>
         </div>
         <button type="button" className="system-status__refresh" disabled={busy} onClick={() => void refresh()}>
-          {busy ? "Checking…" : "Refresh"}
+          {busy ? "Probing…" : "Refresh"}
         </button>
       </header>
 
@@ -69,15 +98,15 @@ export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusP
           <span className="system-status__icon" aria-hidden="true">
             {overall === "operational" ? "✓" : overall === "degraded" ? "!" : "×"}
           </span>
-          <strong>{report?.headline ?? "Running system checks…"}</strong>
+          <strong>{report?.headline ?? "Running live probes…"}</strong>
         </div>
-        <p>{report?.subline ?? "Verifying Deriv, Firebase, and access control."}</p>
+        <p>{report?.subline ?? "Contacting GitHub Status, repository API, Pages, Deriv, and Firestore."}</p>
       </div>
 
       {error ? <p className="modal__error">{error}</p> : null}
 
       <div className="system-status__range">
-        <span>Last {90} checks on this device</span>
+        <span>90 probe slots · grey = no data yet</span>
         {report ? <span>Updated {formatChecked(report.checkedAt)}</span> : null}
       </div>
 
@@ -88,10 +117,18 @@ export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusP
               <div>
                 <strong>{component.name}</strong>
                 <small>{component.detail}</small>
+                <code className="system-status__endpoint">{component.endpoint}</code>
               </div>
-              <span className={`system-status__uptime system-status__uptime--${component.level}`}>
-                {component.uptimePct.toFixed(2)}% uptime
-              </span>
+              <div className="system-status__metrics">
+                <span className={`system-status__uptime system-status__uptime--${component.level}`}>
+                  {component.probeCount > 0
+                    ? `${component.uptimePct.toFixed(2)}% uptime`
+                    : "First probe"}
+                </span>
+                {component.latencyMs !== null ? (
+                  <span className="system-status__latency">{component.latencyMs}ms</span>
+                ) : null}
+              </div>
             </div>
             <div className="system-status__bars" aria-hidden="true">
               {component.bars.map((level, index) => (
@@ -103,6 +140,9 @@ export function SystemStatusPanel({ feedState, feedError, email }: SystemStatusP
       </ul>
 
       <footer className="system-status__foot">
+        <a className="system-status__history" href={GITHUB_REPO_URL} target="_blank" rel="noreferrer">
+          GitHub repo →
+        </a>
         <a className="system-status__history" href={GITHUB_PAGES_URL} target="_blank" rel="noreferrer">
           Hosted desk →
         </a>

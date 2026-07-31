@@ -279,6 +279,7 @@ export function SettingsModal({
                 feedState={feedState}
                 feedError={feedError}
                 email={auth.session?.email ?? null}
+                active={open && tab === "status"}
               />
             ) : null}
           </div>

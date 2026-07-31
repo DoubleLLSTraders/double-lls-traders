@@ -7007,7 +7007,32 @@ html[data-theme="light"] .tick-chart__frame {
 .system-status__foot {
   display: flex;
   justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
   margin-top: 20px;
+}
+
+.system-status__endpoint {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 9px;
+  word-break: break-all;
+}
+
+.system-status__metrics {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex: none;
+}
+
+.system-status__latency {
+  color: var(--muted);
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
 }
 
 .system-status__history {
