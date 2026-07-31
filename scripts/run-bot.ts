@@ -1,14 +1,11 @@
 /**
- * Headless run of the real trading pipeline against the demo account.
+ * Headless demo trading — FAST research by default so buys actually fire.
  *
- * Uses the calibrated elite analyzer (v8), deep pre-flight, bulk buy and
- * settlement — same gates as the app. Demo token only.
+ *   npm run run-bot                         # fast research, 5 trades
+ *   TRADES=5 STAKE=0.35 npm run run-bot
+ *   FAST=0 npm run run-bot                  # elite gates (slow / rare)
  *
- *   npm run run-bot
- *   TRADES=3 RUN_SECONDS=1800 STAKE=0.35 npm run run-bot
- *
- * RESEARCH=1 keeps taking independent armed entries (new barrier after print)
- * so we can measure a few trades; the live UI still banks after 1 win.
+ * Demo token only. Does not change the app's live elite profile.
  */
 import { DerivClient } from "../src/lib/deriv/client";
 import { resolveAccount } from "../src/lib/deriv/rest";
@@ -17,17 +14,16 @@ import { summarise } from "../src/lib/analysis/digits";
 import {
   buildMarketSignal,
   isArmedSignal,
-  pickBetterSignal,
   confirmScore,
+  type MarketSignal,
 } from "../src/lib/analysis/signal";
-import { findBestMarket } from "../src/lib/analysis/bestMarket";
-import { capStake, evaluateEntry, stakeFromRisk } from "../src/lib/bot/gates";
+import { capStake, evaluateEntry, exposureCap, stakeFromRisk } from "../src/lib/bot/gates";
 import { analyzeNextPredictionDeep } from "../src/lib/bot/deepNext";
 import {
   createDiffersFastBotSettings,
   DIFFERS_FAST_SYMBOL,
 } from "../src/lib/bot/differsProfile";
-import { effectiveDiffMultiple } from "../src/lib/bot/performance";
+import { effectiveDiffMultiple, isLowPayoutSymbol } from "../src/lib/bot/performance";
 import { buyDigitContractsBulk, waitForBasketOutcome } from "../src/lib/deriv/trade";
 import type { BotSettings } from "../src/lib/bot/types";
 
@@ -38,10 +34,14 @@ const REST_URL = (process.env.VITE_DERIV_REST_URL ?? "https://api.derivws.com").
   "",
 );
 const ACCOUNT_ID = process.env.VITE_DERIV_DEMO_ACCOUNT_ID?.trim() ?? "";
-const TARGET_TRADES = Number(process.env.TRADES ?? 3);
-const RESEARCH = process.env.RESEARCH !== "0";
-const AGREEMENT_WINDOWS = [1000, 1500, 2000] as const;
-const PRIMARY_WINDOW = 1500;
+const TARGET_TRADES = Number(process.env.TRADES ?? 5);
+/** Fast research is ON by default — elite waits forever in live time. */
+const FAST = process.env.FAST !== "0";
+const SYMBOL = process.env.SYMBOL?.trim() || DIFFERS_FAST_SYMBOL;
+const AGREEMENT_WINDOWS = FAST
+  ? ([500, 1000] as const)
+  : ([1000, 1500, 2000] as const);
+const PRIMARY_WINDOW = FAST ? 500 : 1500;
 
 function wilson(wins: number, n: number, z = 1.96): { low: number; high: number } {
   if (n === 0) return { low: 0, high: 100 };
@@ -57,21 +57,97 @@ function wilson(wins: number, n: number, z = 1.96): { low: number; high: number 
 
 function settings(): BotSettings {
   const base = createDiffersFastBotSettings({
-    dailyLossLimit: Number(process.env.VITE_DAILY_LOSS_LIMIT ?? 10),
-    dailyProfitTarget: Number(process.env.VITE_DAILY_PROFIT_TARGET ?? 10),
-    maxConsecutiveLosses: 1,
-    maxTradesPerDay: 100,
-    maxStake: Number(process.env.VITE_MAX_STAKE ?? 2),
+    dailyLossLimit: Number(process.env.VITE_DAILY_LOSS_LIMIT ?? 20),
+    dailyProfitTarget: Number(process.env.VITE_DAILY_PROFIT_TARGET ?? 20),
+    maxConsecutiveLosses: 99,
+    maxTradesPerDay: 500,
+    maxStake: Number(process.env.VITE_MAX_STAKE ?? 5),
   });
-  const stake = Number(process.env.STAKE ?? base.stake);
+  const stake = Number(process.env.STAKE ?? 0.35);
+
+  if (FAST) {
+    // Soft research gates — timing + sample + barrier. Fires in seconds/minutes.
+    return {
+      ...base,
+      stake,
+      maxStake: Math.max(base.maxStake, stake),
+      contracts: Number(process.env.CONTRACTS ?? 1),
+      minSample: 200,
+      minEdgePercent: 0,
+      minColdGap: 4,
+      maxMomentumGap: 3,
+      skipLowConfidence: false,
+      requireFullConfirm: false,
+      requireMultiWindow: false,
+      requireWindowsEv: false,
+      requireTiming: true,
+      requireUneven: false,
+      maxTradesPerHour: 120,
+      maxRuns: TARGET_TRADES,
+      maxConsecutiveLosses: 99,
+      running: true,
+    };
+  }
+
   return {
     ...base,
     stake,
     maxStake: Math.max(base.maxStake, stake),
     contracts: Number(process.env.CONTRACTS ?? 1),
-    maxRuns: RESEARCH ? TARGET_TRADES : 1,
+    maxRuns: TARGET_TRADES,
     running: true,
   };
+}
+
+/** Fast path: Differs #1 cold with gap + sample. No unique-EV / power-100. */
+function fastEntryOk(
+  signal: MarketSignal,
+  bot: BotSettings,
+  extras: {
+    lastEntryDigit: number | null;
+    lastEntryDigitPrinted: boolean;
+    coolBarrierDigit: number | null;
+    symbol: string;
+  },
+): { ok: true } | { ok: false; reason: string } {
+  if (isLowPayoutSymbol(extras.symbol)) {
+    return { ok: false, reason: `Skip · ${extras.symbol} low payout` };
+  }
+  if (signal.side !== "DIGITDIFF") {
+    return { ok: false, reason: "Skip · not Differs" };
+  }
+  if (signal.watching.sampleSize < bot.minSample) {
+    return {
+      ok: false,
+      reason: `Skip · sample ${signal.watching.sampleSize}/${bot.minSample}`,
+    };
+  }
+  if (!signal.primaryBarrier && !signal.barrierAligned) {
+    return { ok: false, reason: "Skip · not cold barrier" };
+  }
+  if (!signal.timingOk) {
+    return {
+      ok: false,
+      reason: `Skip · cold gap ${signal.watching.signalGap ?? "—"} < ${bot.minColdGap}`,
+    };
+  }
+  if (
+    extras.coolBarrierDigit !== null &&
+    signal.digit === extras.coolBarrierDigit
+  ) {
+    return { ok: false, reason: `Skip · lost on ${signal.digit} already` };
+  }
+  if (
+    extras.lastEntryDigit !== null &&
+    extras.lastEntryDigit === signal.digit &&
+    !extras.lastEntryDigitPrinted
+  ) {
+    return {
+      ok: false,
+      reason: `Wait · re-backing ${signal.digit} · need print first`,
+    };
+  }
+  return { ok: true };
 }
 
 interface Tick {
@@ -81,12 +157,46 @@ interface Tick {
   digit: number;
 }
 
+async function bootstrapHistory(
+  client: DerivClient,
+  symbol: string,
+  need: number,
+): Promise<Tick[]> {
+  const prices: number[] = [];
+  const times: number[] = [];
+  let pipSize = 2;
+  let end: number | "latest" = "latest";
+  while (prices.length < need) {
+    const message = await client.send<HistoryResponse>({
+      ticks_history: symbol,
+      adjust_start_time: 1,
+      count: 1000,
+      end,
+      style: "ticks",
+    });
+    const batchTimes = message.history?.times ?? [];
+    if (batchTimes.length === 0) break;
+    pipSize = message.pip_size ?? pipSize;
+    prices.unshift(...message.history.prices);
+    times.unshift(...batchTimes);
+    const earliest = batchTimes[0];
+    if (end !== "latest" && earliest >= end) break;
+    end = earliest - 1;
+  }
+  return prices.map((quote, index) => ({
+    epoch: times[index],
+    quote,
+    pipSize,
+    digit: lastDigit(quote, pipSize),
+  }));
+}
+
 async function main() {
   const bot = settings();
   console.log(
-    `Elite v8 · ${bot.contracts}x ${bot.stake} · gap≥${bot.minColdGap} · sample≥${bot.minSample} · research=${RESEARCH}`,
+    `${FAST ? "FAST research" : "Elite"} · ${bot.contracts}x ${bot.stake} · gap≥${bot.minColdGap} · sample≥${bot.minSample} · ${SYMBOL}`,
   );
-  console.log(`Target ${TARGET_TRADES} armed trades on demo only.\n`);
+  console.log(`Target ${TARGET_TRADES} demo trades — buys WILL fire when gate clears.\n`);
 
   const account = await resolveAccount(
     { appId: APP_ID, restUrl: REST_URL, token: TOKEN },
@@ -123,60 +233,36 @@ async function main() {
   const startBalance = balance;
   console.log(`Balance: ${startBalance.toFixed(2)} ${currency}\n`);
 
-  console.log("Scanning for an armed market…");
-  const scanStart = Date.now();
-  let best = await findBestMarket(client, bot, DIFFERS_FAST_SYMBOL, {
-    requireReady: true,
-  });
-  if (!best) {
-    console.log("No armed market yet · falling back to best available scan…");
-    best = await findBestMarket(client, bot, DIFFERS_FAST_SYMBOL);
-  }
-  console.log(
-    `Pick: ${best.name} (${best.symbol}) · ${best.signal.label} · power ${best.signal.power} · ${best.signal.confidence} · ${Date.now() - scanStart}ms`,
-  );
-  console.log(`  ${best.signal.reason.slice(0, 180)}\n`);
+  const symbol = SYMBOL;
+  console.log(`Bootstrapping ${symbol}…`);
+  let ticks = await bootstrapHistory(client, symbol, FAST ? 800 : 2500);
+  console.log(`History · ${ticks.length} ticks`);
 
-  const symbol = best.symbol;
-  bot.side = best.signal.side;
-  bot.prediction = best.signal.digit;
-
-  let ticks: Tick[] = [];
   await client.subscribe<HistoryResponse | TickResponse>(
     {
       ticks_history: symbol,
       adjust_start_time: 1,
-      count: 2500,
+      count: 5,
       end: "latest",
       style: "ticks",
     },
     (message) => {
-      if (message.msg_type === "history") {
-        const { prices, times } = message.history;
-        const pipSize = message.pip_size;
-        ticks = prices.map((quote, index) => ({
-          epoch: times[index],
-          quote,
-          pipSize,
-          digit: lastDigit(quote, pipSize),
-        }));
-      } else if (message.msg_type === "tick") {
-        const { epoch, quote, pip_size: pipSize } = message.tick;
+      if (message.msg_type === "tick") {
+        const { epoch, quote, pip_size: pip } = message.tick;
         if (ticks.length > 0 && ticks[ticks.length - 1].epoch >= epoch) return;
         ticks.push({
           epoch,
           quote,
-          pipSize,
-          digit: lastDigit(quote, pipSize),
+          pipSize: pip,
+          digit: lastDigit(quote, pip),
         });
+        if (ticks.length > 4000) ticks = ticks.slice(-3500);
       }
     },
   );
 
-  // Wait for feed to fill primary window.
-  const feedDeadline = Date.now() + 60_000;
-  while (ticks.length < PRIMARY_WINDOW && Date.now() < feedDeadline) {
-    await new Promise((r) => setTimeout(r, 200));
+  while (ticks.length < PRIMARY_WINDOW) {
+    await new Promise((r) => setTimeout(r, 150));
   }
   console.log(`Feed ready · ${ticks.length} ticks on ${symbol}\n`);
 
@@ -191,9 +277,10 @@ async function main() {
     digit: number;
     stake: number;
     contracts: number;
-    entryEpoch: number;
     contractIds: number[];
     label: string;
+    power: number;
+    gap: number | null;
   } = null;
   let handled = -1;
   let skips = 0;
@@ -209,13 +296,14 @@ async function main() {
     gap: number | null;
   }> = [];
 
-  const deadline = Date.now() + Number(process.env.RUN_SECONDS ?? 1800) * 1000;
+  const deadline =
+    Date.now() + Number(process.env.RUN_SECONDS ?? (FAST ? 600 : 2400)) * 1000;
   console.log(
-    `Hunting armed entries until ${TARGET_TRADES} trades or ${Math.round((deadline - Date.now()) / 60000)}min…\n`,
+    `Hunting until ${TARGET_TRADES} trades or ${Math.round((deadline - Date.now()) / 60000)}min…\n`,
   );
 
   while (session.trades < TARGET_TRADES && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, FAST ? 120 : 250));
     const latest = ticks[ticks.length - 1];
     if (!latest || latest.epoch === handled) continue;
     handled = latest.epoch;
@@ -230,11 +318,7 @@ async function main() {
       minColdGap: bot.minColdGap,
       symbol,
     };
-    const signal = pickBetterSignal(
-      buildMarketSignal(stats, "DIGITMATCH", bot.prediction, options),
-      buildMarketSignal(stats, "DIGITDIFF", bot.prediction, options),
-      bot.sidePreference,
-    );
+    const signal = buildMarketSignal(stats, "DIGITDIFF", bot.prediction, options);
 
     if (open) {
       const outcome = await waitForBasketOutcome(client, open.contractIds);
@@ -250,27 +334,15 @@ async function main() {
         won,
         pnl,
         exit: outcome.exitDigit,
-        power: signal.power,
-        gap: signal.watching.signalGap,
+        power: open.power,
+        gap: open.gap,
       });
 
       console.log(
         `  ${won ? "WIN " : "LOSS"} · ${open.label} · exit ${outcome.exitDigit ?? "?"} · ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)} on ${exposure.toFixed(2)} · session ${session.pnl >= 0 ? "+" : ""}${session.pnl.toFixed(2)}`,
       );
 
-      if (!won) {
-        coolBarrierDigit = open.digit;
-        if (!RESEARCH) {
-          console.log("STOPPED · loss (live profile)");
-          open = null;
-          break;
-        }
-      } else if (!RESEARCH) {
-        console.log("STOPPED · banked 1 win (live profile)");
-        open = null;
-        break;
-      }
-
+      if (!won) coolBarrierDigit = open.digit;
       open = null;
       session.currentStake = stakeFromRisk(bot, balance, bot.maxStake);
       continue;
@@ -283,46 +355,61 @@ async function main() {
             (tick) => tick.epoch > lastEntryEpoch! && tick.digit === lastEntryDigit,
           );
 
-    const deep = analyzeNextPredictionDeep({
-      signal,
-      settings: bot,
-      symbol,
-      lastEntryDigit,
-      lastEntryDigitPrinted,
-      winsThisStart: RESEARCH ? 0 : session.wins,
-      coolBarrierDigit,
-      firstEntry: session.trades < 1 || RESEARCH,
-    });
-    if (!deep.ok) {
-      skips += 1;
-      if (skips % 20 === 1) {
-        console.log(
-          `  wait · ${deep.reason.replace(/^Deep · /, "")} · power ${signal.power} · ${signal.confidence}`,
-        );
+    let allow = false;
+    let reason = "";
+
+    if (FAST) {
+      const fast = fastEntryOk(signal, bot, {
+        lastEntryDigit,
+        lastEntryDigitPrinted,
+        coolBarrierDigit,
+        symbol,
+      });
+      allow = fast.ok;
+      reason = fast.ok ? "" : fast.reason;
+      // Exposure ceiling only — do not run elite EV/confidence (those never fire).
+      if (allow) {
+        const cap = exposureCap(bot, balance);
+        if (cap && !cap.affordable) {
+          allow = false;
+          reason = `Skip · balance too small for ${bot.maxExposurePercent}% cap`;
+        }
       }
-      continue;
+    } else {
+      const deep = analyzeNextPredictionDeep({
+        signal,
+        settings: bot,
+        symbol,
+        lastEntryDigit,
+        lastEntryDigitPrinted,
+        winsThisStart: 0,
+        coolBarrierDigit,
+        firstEntry: true,
+      });
+      if (!deep.ok) {
+        allow = false;
+        reason = deep.reason;
+      } else if (!isArmedSignal(signal)) {
+        allow = false;
+        reason = `not armed · ${signal.confidence} · power ${signal.power}`;
+      } else {
+        const gate = evaluateEntry(bot, signal, {
+          lastEntryDigit,
+          lastEntryDigitPrinted,
+          coolBarrierDigit,
+          balance,
+          symbol,
+        });
+        allow = gate.ok;
+        reason = gate.ok ? "" : gate.reason;
+      }
     }
 
-    const gate = evaluateEntry(bot, signal, {
-      tradesLastHour: 0,
-      drawdownPercent: 0,
-      lastEntryDigit,
-      lastEntryDigitPrinted,
-      coolBarrierDigit,
-      balance,
-      symbol,
-    });
-    if (!gate.ok) {
+    if (!allow) {
       skips += 1;
-      if (skips % 20 === 1) console.log(`  skip · ${gate.reason}`);
-      continue;
-    }
-
-    if (!isArmedSignal(signal)) {
-      skips += 1;
-      if (skips % 20 === 1) {
+      if (skips % (FAST ? 8 : 20) === 1) {
         console.log(
-          `  wait · not armed · ${signal.confidence} · power ${signal.power}`,
+          `  wait · ${reason.replace(/^Deep · /, "")} · gap ${signal.watching.signalGap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power}`,
         );
       }
       continue;
@@ -333,21 +420,21 @@ async function main() {
     const stake = capStake(bot.stake, bot, balance);
 
     console.log(
-      `FIRE · ${deep.summary} · stake ${stake} · confirms ${confirmScore(signal)}/5`,
+      `FIRE · Differs ${signal.digit} · gap ${signal.watching.signalGap} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power} · confirms ${confirmScore(signal)}/5 · stake ${stake}`,
     );
 
     const bulk = await buyDigitContractsBulk(
       client,
       {
         symbol,
-        side: bot.side,
-        digit: bot.prediction,
+        side: "DIGITDIFF",
+        digit: signal.digit,
         stake,
         currency,
         duration: bot.duration,
       },
       bot.contracts,
-      { parallel: bot.parallelExecution },
+      { parallel: true },
     );
 
     if (bulk.filled.length === 0) {
@@ -357,19 +444,20 @@ async function main() {
 
     const risk = stake * bulk.filled.length;
     const payout = bulk.filled.reduce((sum, leg) => sum + leg.payout, 0);
-    const label = `${bot.side === "DIGITMATCH" ? "Matches" : "Differs"} ${bot.prediction}`;
+    const label = `Differs ${signal.digit}`;
     console.log(
-      `OPEN ${label} · ${bulk.filled.length} leg · risk ${risk.toFixed(2)} / win +${(payout - risk).toFixed(2)} · power ${signal.power}`,
+      `OPEN ${label} · risk ${risk.toFixed(2)} / win +${(payout - risk).toFixed(2)} · id ${bulk.filled[0].contractId}`,
     );
-    lastEntryDigit = bot.prediction;
+    lastEntryDigit = signal.digit;
     lastEntryEpoch = latest.epoch;
     open = {
-      digit: bot.prediction,
+      digit: signal.digit,
       stake,
       contracts: bulk.filled.length,
-      entryEpoch: latest.epoch,
       contractIds: bulk.filled.map((leg) => leg.contractId),
       label,
+      power: signal.power,
+      gap: signal.watching.signalGap,
     };
   }
 
@@ -386,30 +474,32 @@ async function main() {
       won: outcome.won,
       pnl,
       exit: outcome.exitDigit,
-      power: 0,
-      gap: null,
+      power: open.power,
+      gap: open.gap,
     });
     console.log(
       `  ${outcome.won ? "WIN " : "LOSS"} · exit ${outcome.exitDigit ?? "?"} · ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}`,
     );
   }
 
-  await new Promise((r) => setTimeout(r, 3000));
+  await new Promise((r) => setTimeout(r, 2000));
 
   console.log("\n──────── journal ────────");
   for (const [i, row] of journal.entries()) {
     console.log(
-      `  #${i + 1} Differs ${row.digit} · ${row.won ? "WIN" : "LOSS"} · exit ${row.exit ?? "?"} · ${row.pnl >= 0 ? "+" : ""}${row.pnl.toFixed(2)}`,
+      `  #${i + 1} Differs ${row.digit} · ${row.won ? "WIN" : "LOSS"} · exit ${row.exit ?? "?"} · ${row.pnl >= 0 ? "+" : ""}${row.pnl.toFixed(2)} · gap ${row.gap ?? "—"}`,
     );
   }
 
   console.log("\n──────── session ────────");
-  console.log(`Skips logged   : ~${skips}`);
+  console.log(`Mode           : ${FAST ? "FAST research" : "elite"}`);
+  console.log(`Skips          : ${skips}`);
   console.log(`Trades         : ${session.trades} (${session.wins}W / ${session.losses}L)`);
-  console.log(`Bot P&L        : ${session.pnl >= 0 ? "+" : ""}${session.pnl.toFixed(2)} ${currency}`);
-  console.log(`Balance delta  : ${(balance - startBalance) >= 0 ? "+" : ""}${(balance - startBalance).toFixed(2)} ${currency}`);
   console.log(
-    `Match          : ${Math.abs(session.pnl - (balance - startBalance)) < 0.05 ? "OK" : "CHECK"}`,
+    `Bot P&L        : ${session.pnl >= 0 ? "+" : ""}${session.pnl.toFixed(2)} ${currency}`,
+  );
+  console.log(
+    `Balance delta  : ${balance - startBalance >= 0 ? "+" : ""}${(balance - startBalance).toFixed(2)} ${currency}`,
   );
 
   if (session.trades > 0) {
@@ -417,25 +507,14 @@ async function main() {
     const breakEven = (1 / multiple) * 100;
     const ci = wilson(session.wins, session.trades);
     const rate = (session.wins / session.trades) * 100;
-
     console.log("\n──────── verdict ────────");
     console.log(
       `Win rate       : ${rate.toFixed(2)}%  95% CI [${ci.low.toFixed(2)} - ${ci.high.toFixed(2)}]`,
     );
-    console.log(
-      `Break-even     : ${breakEven.toFixed(2)}%  (payout ${multiple.toFixed(4)}x on ${bot.stake})`,
-    );
+    console.log(`Break-even     : ${breakEven.toFixed(2)}%`);
     console.log(`Per trade      : ${(session.pnl / session.trades).toFixed(4)} ${currency}`);
-    const verdict =
-      ci.high < breakEven
-        ? "LOSING · CI entirely under break-even."
-        : ci.low > breakEven
-          ? "PROFITABLE · CI entirely over break-even."
-          : "INCONCLUSIVE · need more trades (fair Differs ≈90% vs BE ≈91%).";
-    console.log(`Verdict        : ${verdict}`);
   } else {
-    console.log("\nNo armed trade fired before timeout.");
-    console.log("Elite bar is rare (~0.13% of ticks) — try RUN_SECONDS=3600.");
+    console.log("\nNo trades fired — check token / feed.");
   }
 
   client.disconnect();
