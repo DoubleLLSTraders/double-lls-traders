@@ -1,3 +1,5 @@
+import { storageKey } from "../platform";
+
 /** Platform identity — display name vs internal storage keys. */
 export const APP_NAME = "Double LLS Traders";
 export const APP_TAGLINE = "Institutional-grade Deriv Matches / Differs desk";
@@ -9,9 +11,9 @@ export const ALLOWED_EMAILS = [
   "josephokero074@gmail.com",
 ] as const;
 
-export const AUTH_SESSION_KEY = "brick-trader-auth-session";
-export const AUTH_LOCKOUT_KEY = "double-lls-auth-lockout";
-export const AUTH_FAIL_KEY = "double-lls-auth-fails";
+export const AUTH_SESSION_KEY = storageKey("auth-session");
+export const AUTH_LOCKOUT_KEY = storageKey("auth-lockout");
+export const AUTH_FAIL_KEY = storageKey("auth-fails");
 
 /** How long a full sign-in (Google + TOTP) stays valid. */
 export const SESSION_TTL_MS = 8 * 60 * 60 * 1000;

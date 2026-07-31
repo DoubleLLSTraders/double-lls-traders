@@ -6187,7 +6187,7 @@ html[data-theme="light"] .tick-chart__frame {
 
 .auth-screen__card {
   width: min(440px, 100%);
-  padding: 28px 24px 24px;
+  padding: 32px 28px 28px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--panel);
@@ -6210,16 +6210,50 @@ html[data-theme="light"] .tick-chart__frame {
 }
 
 .auth-screen__lead {
-  margin: 0 0 20px;
+  margin: 0 0 28px;
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 .auth-screen__google {
   display: flex;
   justify-content: center;
-  margin-bottom: 14px;
+  margin-bottom: 0;
+}
+
+.auth-screen__divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 24px 0 20px;
+  color: var(--muted-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.auth-screen__divider::before,
+.auth-screen__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line-soft);
+}
+
+.auth-screen__alt {
+  display: grid;
+  gap: 12px;
+  padding: 18px 16px 4px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+}
+
+.auth-screen__alt--compact {
+  margin-top: 16px;
+  padding: 14px 14px 2px;
 }
 
 .auth-screen__hint,
@@ -6227,7 +6261,7 @@ html[data-theme="light"] .tick-chart__frame {
   margin: 0;
   color: var(--muted-soft);
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .auth-screen__list {
@@ -6295,7 +6329,7 @@ html[data-theme="light"] .tick-chart__frame {
 
 .auth-screen__form {
   display: grid;
-  gap: 12px;
+  gap: 16px;
   text-align: left;
 }
 
@@ -6343,7 +6377,7 @@ html[data-theme="light"] .tick-chart__frame {
 }
 
 .auth-screen__link {
-  margin-top: 14px;
+  margin-top: 20px;
   border: 0;
   background: none;
   color: var(--muted);
@@ -6353,7 +6387,7 @@ html[data-theme="light"] .tick-chart__frame {
 }
 
 .auth-screen__error {
-  margin: 14px 0 0;
+  margin: 20px 0 0;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid rgba(229, 57, 53, 0.4);
@@ -6442,20 +6476,22 @@ html[data-theme="light"] .tick-chart__frame {
 
 .auth-screen__recovery-btn {
   width: 100%;
-  margin-top: 4px;
-  padding: 10px 14px;
+  padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
+  border-radius: 12px;
+  background: transparent;
   color: var(--text-soft);
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
 .auth-screen__recovery-btn:hover {
   border-color: var(--line-strong);
   color: var(--text);
+  background: var(--surface-input);
 }
 
 .auth-screen__warn {

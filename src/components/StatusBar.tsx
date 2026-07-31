@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConnectionState } from "../lib/deriv/types";
 import type { AppConfig } from "../lib/config";
 import { useKesRate } from "../hooks/useFxRate";
+import { storageKey } from "../lib/platform";
 
 const STATE_LABELS: Record<ConnectionState, string> = {
   idle: "Idle",
@@ -13,7 +14,7 @@ const STATE_LABELS: Record<ConnectionState, string> = {
   closed: "Offline",
 };
 
-const DISPLAY_KEY = "brick-trader-balance-currency";
+const DISPLAY_KEY = storageKey("balance-currency");
 
 type DisplayCurrency = "account" | "KES";
 

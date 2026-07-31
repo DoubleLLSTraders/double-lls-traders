@@ -13,7 +13,7 @@ rules_version = '2';
 // Server (Admin SDK) writes users, artistProfiles, release tracks, followers.
 // Clients: read own profile; artists may save in-progress drafts under releases/{uid}/drafts.
 //
-// Brick Trader: totp_secrets/{email} — Double LLS Traders Google Authenticator + hashed recovery codes.
+// Double LLS Traders: totp_secrets/{email} — Google Authenticator + hashed recovery codes.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -52,7 +52,7 @@ service cloud.firestore {
         && (!('step' in d) || (d.step is int && d.step >= 1 && d.step <= 6));
     }
 
-    // Brick Trader — Google Authenticator TOTP secrets (client read/write, email doc id)
+    // Double LLS Traders — TOTP + recovery (hashed codes in Firestore)
     match /totp_secrets/{email} {
       allow read, write: if email in [
         'munyivaemmanuel@gmail.com',

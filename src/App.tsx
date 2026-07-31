@@ -40,6 +40,7 @@ import {
   liveSettingsForBalance,
   planLiveStake,
 } from "./lib/bot/liveProfile";
+import { storageKey } from "./lib/platform";
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
@@ -60,7 +61,7 @@ const WINDOW_SIZES = [250, 500, 1000, 2000] as const;
  * confidence, so anything shorter mostly confirms randomness.
  */
 const AGREEMENT_WINDOWS = [1500, 2000, 2500] as const;
-const BOT_SETTINGS_KEY = "brick-trader-bot-settings";
+const BOT_SETTINGS_KEY = storageKey("bot-settings");
 const BOT_SETTINGS_VERSION = 29;
 
 /** Wait for the feed to reload after switching volatility index. */

@@ -4,9 +4,9 @@
 
 > **Private platform.** Access is restricted to authorized Google accounts with Google Authenticator (TOTP) and one-time recovery codes stored as SHA-256 hashes in Firebase Firestore.
 
-**Repository:** [github.com/munyivaemmanuel-rgb/brick-trader](https://github.com/munyivaemmanuel-rgb/brick-trader) (private)
+**Repository:** [github.com/DoubleLLSTraders/brick-trader](https://github.com/DoubleLLSTraders/brick-trader) (private)
 
-**Hosted app:** https://munyivaemmanuel-rgb.github.io/brick-trader/
+**Hosted app:** https://doublellstraders.github.io/brick-trader/
 
 ---
 
@@ -30,7 +30,9 @@ See [SECURITY.md](./SECURITY.md) for operator checklist and rotation guidance.
 
 1. **Deriv** — [Developer dashboard](https://developers.deriv.com/dashboard/) app ID (0% markup, Trade scope).
 2. **Demo PAT** — [home.deriv.com → API tokens](https://home.deriv.com/dashboard/profile/api-tokens) with Trade scope.
-3. **Google OAuth** — Web client ID with `http://localhost:5173` as authorized origin.
+3. **Google OAuth** — Web client ID with these authorized origins:
+   - `http://localhost:5173`
+   - `https://doublellstraders.github.io`
 4. **Firebase** — Firestore enabled; publish `firestore.rules`.
 5. Copy env and fill in:
 
@@ -78,7 +80,9 @@ Add **Actions secrets** (Settings → Secrets → Actions) mirroring `.env`:
 | `VITE_FIREBASE_*` | yes (all Firebase web config vars) |
 | `VITE_TRADING_MODE` | `live` or `paper` |
 
-> Private repos: GitHub Pages may require a paid plan. Alternatively deploy `dist/` to any static host.
+Live URL after deploy: **https://doublellstraders.github.io/brick-trader/**
+
+> Update Google OAuth authorized JavaScript origins when the hosted URL changes.
 
 ---
 

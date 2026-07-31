@@ -7,7 +7,9 @@ import {
   type ReactNode,
 } from "react";
 
-const STORAGE_KEY = "brick-trader-bot-split";
+import { storageKey } from "../lib/platform";
+
+const STORAGE_KEY = storageKey("bot-split");
 const MIN_PCT = 28;
 const MAX_PCT = 72;
 const DEFAULT_PCT = 42;

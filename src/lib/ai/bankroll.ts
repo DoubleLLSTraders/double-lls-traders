@@ -1,6 +1,8 @@
 /** Admin-assigned AI Operator pocket — app-level accounting, not a Deriv sub-account. */
 
-const STORAGE_KEY = "brick-trader-ai-bankroll";
+import { storageKey } from "../platform";
+
+const STORAGE_KEY = storageKey("ai-bankroll");
 const LOG_LIMIT = 80;
 
 export type AiOperatorStatus =

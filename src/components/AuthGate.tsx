@@ -142,14 +142,22 @@ function SignInPanel() {
           shape="pill"
         />
       </div>
-      <button
-        type="button"
-        className="auth-screen__recovery-btn"
-        onClick={() => auth.requestRecoverySignIn()}
-      >
-        Lost phone? Use recovery code
-      </button>
-      <p className="auth-screen__hint">Tap above, then continue with Google.</p>
+
+      <div className="auth-screen__divider" aria-hidden="true">
+        <span>or</span>
+      </div>
+
+      <div className="auth-screen__alt">
+        <button
+          type="button"
+          className="auth-screen__recovery-btn"
+          onClick={() => auth.requestRecoverySignIn()}
+        >
+          Lost phone? Use recovery code
+        </button>
+        <p className="auth-screen__hint">Select recovery, then continue with Google.</p>
+      </div>
+
       {auth.error ? <p className="auth-screen__error">{auth.error}</p> : null}
     </AuthShell>
   );
@@ -316,6 +324,16 @@ function TotpVerifyPanel() {
           />
         </label>
         <button
+          type="submit"
+          className="auth-screen__submit"
+          disabled={auth.busy || code.trim().length < (recovery ? 8 : 6)}
+        >
+          {auth.busy ? "Verifying…" : "Unlock trading"}
+        </button>
+      </form>
+
+      <div className="auth-screen__alt auth-screen__alt--compact">
+        <button
           type="button"
           className="auth-screen__recovery-btn"
           onClick={() => {
@@ -326,14 +344,7 @@ function TotpVerifyPanel() {
         >
           {recovery ? "Use Authenticator instead" : "Use recovery code"}
         </button>
-        <button
-          type="submit"
-          className="auth-screen__submit"
-          disabled={auth.busy || code.trim().length < (recovery ? 8 : 6)}
-        >
-          {auth.busy ? "Verifying…" : "Unlock trading"}
-        </button>
-      </form>
+      </div>
 
       <button type="button" className="auth-screen__link" onClick={() => auth.signOut()}>
         Sign out · use a different Google account

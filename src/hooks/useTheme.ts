@@ -9,9 +9,11 @@ import {
   type ReactNode,
 } from "react";
 
+import { storageKey } from "../lib/platform";
+
 export type Theme = "dark" | "light";
 
-const STORAGE_KEY = "brick-trader-theme";
+const STORAGE_KEY = storageKey("theme");
 
 function readStoredTheme(): Theme {
   try {

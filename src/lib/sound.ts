@@ -7,7 +7,9 @@
  * (Start) unlocks it.
  */
 
-const STORAGE_KEY = "brick-trader-sound";
+import { storageKey } from "../lib/platform";
+
+const STORAGE_KEY = storageKey("sound");
 
 let context: AudioContext | null = null;
 let enabled = readEnabled();
