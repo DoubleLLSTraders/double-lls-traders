@@ -4,9 +4,9 @@
 
 > **Private platform.** Access is restricted to authorized Google accounts with Google Authenticator (TOTP) and one-time recovery codes stored as SHA-256 hashes in Firebase Firestore.
 
-**Repository:** [github.com/DoubleLLSTraders/brick-trader](https://github.com/DoubleLLSTraders/brick-trader) (private)
+**Repository:** [github.com/DoubleLLSTraders/double-lls-traders](https://github.com/DoubleLLSTraders/double-lls-traders) (private)
 
-**Hosted app:** https://doublellstraders.github.io/brick-trader/
+**Hosted app:** https://doublellstraders.github.io/double-lls-traders/
 
 ---
 
@@ -59,7 +59,7 @@ npm run check-auth
 npm run dev
 ```
 
-Open http://localhost:5173 (or `/brick-trader/` if `GITHUB_PAGES=true`).
+Open http://localhost:5173 (or `/double-lls-traders/` if `GITHUB_PAGES=true`).
 
 First login: Google → scan Authenticator QR → **download recovery codes** → enter 6-digit code.
 
@@ -80,7 +80,7 @@ Add **Actions secrets** (Settings → Secrets → Actions) mirroring `.env`:
 | `VITE_FIREBASE_*` | yes (all Firebase web config vars) |
 | `VITE_TRADING_MODE` | `live` or `paper` |
 
-Live URL after deploy: **https://doublellstraders.github.io/brick-trader/**
+Live URL after deploy: **https://doublellstraders.github.io/double-lls-traders/**
 
 > Update Google OAuth authorized JavaScript origins when the hosted URL changes.
 

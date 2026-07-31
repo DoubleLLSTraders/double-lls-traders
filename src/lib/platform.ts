@@ -1,6 +1,6 @@
 /** GitHub org + repo — keep in sync with Settings → General on GitHub. */
 export const GITHUB_ORG = "DoubleLLSTraders";
-export const GITHUB_REPO = "brick-trader";
+export const GITHUB_REPO = "double-lls-traders";
 
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}`;
 export const GITHUB_PAGES_HOST = `${GITHUB_ORG.toLowerCase()}.github.io`;
