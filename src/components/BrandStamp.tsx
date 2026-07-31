@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useTheme } from "../hooks/useTheme";
 import { isSoundEnabled, playWinSound, setSoundEnabled } from "../lib/sound";
-import { publicAsset } from "../lib/publicAsset";
+import logoDark from "../assets/logo.png";
+import logoLight from "../assets/logo-light.png";
 
 function SpeakerIcon({ on }: { on: boolean }) {
   return (
@@ -30,7 +31,7 @@ export function BrandStamp() {
     <div className="brand-stamp" aria-label="Brick Trader notice">
       <div className="brand-stamp__inner">
         <img
-          src={publicAsset(theme === "light" ? "logo-light.png" : "logo.png")}
+          src={theme === "light" ? logoLight : logoDark}
           alt=""
           className="brand-stamp__logo"
         />

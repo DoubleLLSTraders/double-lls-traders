@@ -40,7 +40,8 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { config, isConfigured } from "./lib/config";
-import { publicAsset } from "./lib/publicAsset";
+import logoDark from "./assets/logo.png";
+import logoLight from "./assets/logo-light.png";
 import {
   AI_TRADE_NOTE,
   applyAiTradePnl,
@@ -201,7 +202,7 @@ function BrandMark() {
   return (
     <div className="topbar__brand">
       <img
-        src={publicAsset(theme === "light" ? "logo-light.png" : "logo.png")}
+        src={theme === "light" ? logoLight : logoDark}
         alt=""
         className="topbar__logo"
       />
