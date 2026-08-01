@@ -2048,53 +2048,167 @@ html[data-theme="light"] .brand-stamp__badge {
   animation: pulse 1.4s ease infinite;
 }
 
+.digit-map {
+  position: relative;
+}
+
+.digit-map__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.digit-map__live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.digit-map__live i.is-on {
+  background: var(--green-bright);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 28%, transparent);
+  animation: digit-live-dot 1.6s ease infinite;
+}
+
+@keyframes digit-live-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .digit-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 12px 10px;
+  gap: 14px 10px;
+  padding: 2px 2px 4px;
 }
 
 .digit-tile {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0;
   border: none;
   background: transparent;
   color: inherit;
   font: inherit;
   cursor: pointer;
+  z-index: 0;
+}
+
+.digit-tile--hover {
+  z-index: 3;
+}
+
+.digit-tile__ring-wrap {
+  position: relative;
+  width: 54px;
+  height: 54px;
+}
+
+.digit-tile__ring {
+  position: absolute;
+  inset: 0;
+  width: 54px;
+  height: 54px;
+  overflow: visible;
+}
+
+.digit-tile__ring-track,
+.digit-tile__ring-fill {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.digit-tile__ring-track {
+  stroke: var(--digit-tile-outer);
+  opacity: 0.7;
+}
+
+.digit-tile__ring-fill {
+  stroke: var(--muted);
+  stroke-linecap: round;
+  transition: stroke-dasharray 220ms ease, stroke 160ms ease;
+}
+
+.digit-tile__ring-fill--high {
+  stroke: var(--digit-high);
+}
+
+.digit-tile__ring-fill--second {
+  stroke: var(--digit-second);
+}
+
+.digit-tile__ring-fill--low {
+  stroke: var(--digit-low);
 }
 
 .digit-tile__box {
+  position: absolute;
+  inset: 5px;
   display: grid;
   place-items: center;
-  width: 52px;
-  height: 52px;
   border-radius: 50%;
   border: 1.5px solid var(--digit-tile-outer);
   background: var(--digit-tile-grad);
   font-family: var(--font-ui);
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
   color: var(--text);
   transition:
     transform 140ms ease,
     border-color 140ms ease,
     background 140ms ease,
-    color 140ms ease;
+    color 140ms ease,
+    box-shadow 140ms ease;
 }
 
-.digit-tile:hover .digit-tile__box {
-  transform: translateY(-2px);
+.digit-tile:hover .digit-tile__box,
+.digit-tile--hover .digit-tile__box {
+  transform: translateY(-2px) scale(1.03);
   border-color: var(--line-strong);
+}
+
+.digit-tile--live .digit-tile__box {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+.digit-tile--pulse .digit-tile__box {
+  animation: digit-tile-pulse 700ms ease;
+}
+
+@keyframes digit-tile-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 .digit-tile--selected .digit-tile__box {
   background: var(--digit-tile-selected-bg);
   color: var(--digit-tile-selected-fg);
   border-color: var(--digit-tile-selected-bg);
+  box-shadow: 0 0 0 3px var(--digit-tile-selected-glow);
+}
+
+.digit-tile--selected .digit-tile__ring-fill {
+  stroke: var(--digit-tile-selected-bg);
 }
 
 .digit-tile__percent {
@@ -2103,6 +2217,8 @@ html[data-theme="light"] .brand-stamp__badge {
   font-weight: 600;
   text-align: center;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  transition: color 160ms ease;
 }
 
 .digit-tile__percent--high {
@@ -2115,6 +2231,73 @@ html[data-theme="light"] .brand-stamp__badge {
 
 .digit-tile__percent--low {
   color: var(--digit-low);
+}
+
+.digit-tile__tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  text-align: left;
+  z-index: 5;
+}
+
+html[data-theme="light"] .digit-tile__tip {
+  background: color-mix(in srgb, var(--panel) 97%, white);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.digit-tile__tip strong {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.digit-tile__tip em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.digit-map__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.digit-map__legend .is-high {
+  color: var(--digit-high);
+}
+
+.digit-map__legend .is-low {
+  color: var(--digit-low);
+}
+
+.digit-map__legend-live {
+  margin-left: auto;
+  color: var(--green-bright);
+  font-weight: 600;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2956,6 +3139,64 @@ html[data-theme="light"] .tick-chart__frame {
   width: 100%;
   height: 100%;
   min-height: 360px;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.tick-chart__hit {
+  cursor: crosshair;
+}
+
+.tick-chart__hover-meta {
+  color: var(--muted) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.tick-chart__hover-cross {
+  stroke: var(--text);
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.tick-chart__hover-dot {
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.tick-chart__hover-badge {
+  fill: var(--text);
+}
+
+.tick-chart__hover-badge-text {
+  fill: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.tick-chart__tip {
+  fill: color-mix(in srgb, var(--panel) 92%, transparent);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.28));
+}
+
+html[data-theme="light"] .tick-chart__tip {
+  fill: color-mix(in srgb, var(--panel) 96%, white);
+}
+
+.tick-chart__tip-label {
+  fill: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tick-chart__tip-price {
+  fill: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .tick-chart__grid {
@@ -6507,6 +6748,41 @@ html[data-theme="light"] .tick-chart__frame {
   font-size: 11px;
   line-height: 1.45;
   text-align: left;
+}
+
+.auth-screen__error--domain p {
+  margin: 0 0 10px;
+}
+
+.auth-screen__domain-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: #fecaca;
+}
+
+.auth-screen__domain-list code {
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+}
+
+.auth-screen__firebase-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 255, 128, 0.35);
+  background: rgba(0, 255, 128, 0.1);
+  color: var(--green-bright);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.auth-screen__firebase-link:hover {
+  background: rgba(0, 255, 128, 0.18);
+  border-color: rgba(0, 255, 128, 0.55);
+  text-decoration: underline;
 }
 
 .topbar__signout {

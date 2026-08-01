@@ -7,6 +7,12 @@ import { isAccessControlConfigured } from "../hooks/useAppAuth";
 import { AuthProvider, useAppAuth } from "../context/AuthContext";
 import { downloadBackupCodesFile } from "../lib/auth/backupCodes";
 import { APP_NAME } from "../lib/brand";
+import { GITHUB_PAGES_HOST } from "../lib/platform";
+import {
+  getFirebaseAuthSettingsUrl,
+  isFirebaseUnauthorizedDomainMessage,
+  requiredFirebaseAuthDomains,
+} from "../lib/firebase/auth";
 
 interface AuthGateProps {
   children: React.ReactNode;
@@ -66,8 +72,8 @@ function AuthConfigNotice() {
             Firebase Console → Authentication → Sign-in method → <strong>enable Google</strong>.
           </li>
           <li>
-            Firebase Console → Authentication → Settings → add <code>localhost</code> to authorized
-            domains if missing.
+            Firebase Console → Authentication → Settings → authorized domains:{" "}
+            <code>localhost</code>, <code>{GITHUB_PAGES_HOST}</code>.
           </li>
           <li>
             <code>VITE_FIREBASE_API_KEY</code>, <code>VITE_FIREBASE_PROJECT_ID</code>,{" "}
@@ -124,6 +130,36 @@ function RecoveryCodesBlock({
   );
 }
 
+function AuthScreenError({ message }: { message: string }) {
+  const settingsUrl = getFirebaseAuthSettingsUrl();
+  const showDomainHelp = isFirebaseUnauthorizedDomainMessage(message);
+
+  if (showDomainHelp && settingsUrl) {
+    return (
+      <div className="auth-screen__error auth-screen__error--domain">
+        <p>{message}</p>
+        <ul className="auth-screen__domain-list">
+          {requiredFirebaseAuthDomains().map((domain) => (
+            <li key={domain}>
+              <code>{domain}</code>
+            </li>
+          ))}
+        </ul>
+        <a
+          className="auth-screen__firebase-link"
+          href={settingsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open Firebase Authorized domains →
+        </a>
+      </div>
+    );
+  }
+
+  return <p className="auth-screen__error">{message}</p>;
+}
+
 function SignInPanel() {
   const auth = useAppAuth();
 
@@ -164,7 +200,7 @@ function SignInPanel() {
         <p className="auth-screen__hint">Select recovery, then continue with Google.</p>
       </div>
 
-      {auth.error ? <p className="auth-screen__error">{auth.error}</p> : null}
+      {auth.error ? <AuthScreenError message={auth.error} /> : null}
     </AuthShell>
   );
 }
@@ -220,7 +256,7 @@ function TotpSetupPanel() {
         >
           Continue to sign in
         </button>
-        {auth.error ? <p className="auth-screen__error">{auth.error}</p> : null}
+        {auth.error ? <AuthScreenError message={auth.error} /> : null}
       </AuthShell>
     );
   }
@@ -284,7 +320,7 @@ function TotpSetupPanel() {
         </button>
       </form>
 
-      {auth.error ? <p className="auth-screen__error">{auth.error}</p> : null}
+      {auth.error ? <AuthScreenError message={auth.error} /> : null}
     </AuthShell>
   );
 }
@@ -356,7 +392,7 @@ function TotpVerifyPanel() {
         Sign out · use a different Google account
       </button>
 
-      {auth.error ? <p className="auth-screen__error">{auth.error}</p> : null}
+      {auth.error ? <AuthScreenError message={auth.error} /> : null}
     </AuthShell>
   );
 }

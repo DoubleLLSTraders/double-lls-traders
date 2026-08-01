@@ -6,7 +6,35 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { getFirebaseApp } from "./config";
+import { GITHUB_PAGES_HOST } from "../platform";
+import { getFirebaseApp, readFirebaseConfig } from "./config";
+
+/** Firebase Console → Authentication → Settings (authorized domains). */
+export function getFirebaseAuthSettingsUrl(): string | null {
+  const projectId = readFirebaseConfig()?.projectId;
+  if (!projectId) return null;
+  return `https://console.firebase.google.com/project/${encodeURIComponent(projectId)}/authentication/settings`;
+}
+
+/** Domains that must appear under Firebase Auth → Authorized domains. */
+export function requiredFirebaseAuthDomains(): string[] {
+  const domains = ["localhost"];
+  if (typeof window !== "undefined" && window.location.hostname) {
+    domains.push(window.location.hostname);
+  } else {
+    domains.push(GITHUB_PAGES_HOST);
+  }
+  return [...new Set(domains)];
+}
+
+export function isFirebaseUnauthorizedDomainError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return msg.includes("auth/unauthorized-domain");
+}
+
+export function isFirebaseUnauthorizedDomainMessage(message: string): boolean {
+  return message.includes("Authorized domains") || message.includes("not authorized in Firebase");
+}
 
 /** Wait until Firebase Auth finishes restoring persistence (or times out). */
 export function waitForFirebaseAuth(timeoutMs = 8000): Promise<User | null> {
@@ -71,7 +99,9 @@ export function explainFirebaseAuthError(error: unknown): string {
     return "Pop-up blocked. Allow pop-ups for this site and try again.";
   }
   if (msg.includes("auth/unauthorized-domain")) {
-    return "This domain is not authorized in Firebase. Add it under Authentication → Settings → Authorized domains.";
+    const host = typeof window !== "undefined" ? window.location.hostname : GITHUB_PAGES_HOST;
+    const project = readFirebaseConfig()?.projectId ?? "your Firebase project";
+    return `Add "${host}" to Firebase Authorized domains (project: ${project}). Use the link below, click Add domain, save, then try again.`;
   }
   return msg || "Google sign-in failed.";
 }
