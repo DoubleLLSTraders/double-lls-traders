@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:pages": "tsx scripts/build-pages.ts",
+    "check-repo-safe": "tsx scripts/check-repo-safe.ts",
     "lint": "oxlint",
     "preview": "vite preview",
     "check-connection": "tsx --env-file=.env scripts/check-connection.ts",
