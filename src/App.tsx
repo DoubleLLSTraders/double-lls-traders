@@ -25,7 +25,6 @@ import { useTheme } from "./hooks/useTheme";
 import { summarise } from "./lib/analysis/digits";
 import {
   buildMarketSignal,
-  isArmedSignal,
   pickBetterSignal,
   type ContractSide,
 } from "./lib/analysis/signal";
@@ -471,6 +470,23 @@ export default function App() {
     [feed.client, feed.state, scanBotSettings, symbol, bot.minSample],
   );
 
+  const symbolHopRef = useRef(symbol);
+  symbolHopRef.current = symbol;
+  const botGateRef = useRef({
+    minColdGap: bot.minColdGap,
+    minSample: bot.minSample,
+    maxMomentumGap: bot.maxMomentumGap,
+    side: bot.side,
+    running: bot.running,
+  });
+  botGateRef.current = {
+    minColdGap: bot.minColdGap,
+    minSample: bot.minSample,
+    maxMomentumGap: bot.maxMomentumGap,
+    side: bot.side,
+    running: bot.running,
+  };
+
   /**
    * Fast volatility carousel — next index in ~1s (no 10-market scan that
    * pinned the desk on V75 for half a minute).
@@ -481,7 +497,7 @@ export default function App() {
       if (marketSwitchBusy.current) return;
       marketSwitchBusy.current = true;
       switchHoldRef.current = true;
-      const next = nextVolatilitySymbol(symbol);
+      const next = nextVolatilitySymbol(symbolHopRef.current);
       setTimerNote(`${reason} · ${volatilityTag(next)}`);
       setSymbol(next);
       try {
@@ -490,22 +506,18 @@ export default function App() {
           80,
           () => feedSnapshotRef.current,
           () => botHaltRef.current,
-          10000,
+          8000,
         );
         if (botHaltRef.current) return;
         const live = signalRef.current;
+        const gate = botGateRef.current;
         setBot((current) => ({
           ...current,
           side: current.autoSide ? live.side : current.side,
           prediction: live.digit,
           autoFollow: true,
         }));
-        const deskReady = isDeskTradeReady(live, {
-          minColdGap: bot.minColdGap,
-          minSample: bot.minSample,
-          maxMomentumGap: bot.maxMomentumGap,
-          side: bot.side,
-        });
+        const deskReady = isDeskTradeReady(live, gate);
         setTimerNote(
           deskReady
             ? `Good · ${volatilityTag(next)} · ${live.label}`
@@ -518,15 +530,7 @@ export default function App() {
         marketSwitchBusy.current = false;
       }
     },
-    [
-      feed.client,
-      feed.state,
-      symbol,
-      bot.minColdGap,
-      bot.minSample,
-      bot.maxMomentumGap,
-      bot.side,
-    ],
+    [feed.client, feed.state],
   );
 
   const switchToAnalyzedMarket = useCallback(
@@ -630,31 +634,37 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // Efficient hunt: if not Good, carousel to the next volatility every ~3.5s.
-  // Works while hunting OR watching Market — never sits on one Almost tape.
+  // Hunt carousel: tick updates used to reset this timer every second so the
+  // hop never fired and V75 looked "stuck". Interval is stable; Good is read
+  // from refs inside the tick.
+  const paperBusyRef = useRef(false);
+  paperBusyRef.current = !!(paper.session.open || paper.orderPending);
+
   useEffect(() => {
     if (scanningMarket || arm.arming) return;
     if (!feed.client || feed.state !== "ready") return;
-    if (paper.session.open || paper.orderPending) return;
     if (menu !== "market" && !bot.running) return;
-
-    const good = isDeskTradeReady(signal, {
-      minColdGap: bot.minColdGap,
-      minSample: bot.minSample,
-      maxMomentumGap: bot.maxMomentumGap,
-      side: bot.side,
-    });
-    if (good) return;
 
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current || switchHoldRef.current) return;
-      if (paper.session.open || paper.orderPending) return;
+      if (paperBusyRef.current) return;
+      const gate = botGateRef.current;
+      const good = isDeskTradeReady(signalRef.current, gate);
+      // While executing: stay only when Digits is Good so the bot can buy.
+      // Otherwise keep cycling volatilities.
+      if (good) return;
       void hopNextVolatility(
-        bot.running
-          ? "Bad / Almost · next volatility"
+        gate.running
+          ? "Hunting · next volatility"
           : "Live analyze · next volatility",
       );
-    }, 3500);
+    }, 2800);
+
+    // Kick immediately so Start doesn't wait a full interval on a dead tape.
+    if (bot.running && !isDeskTradeReady(signalRef.current, botGateRef.current)) {
+      void hopNextVolatility("Hunting · next volatility");
+    }
+
     return () => window.clearInterval(id);
   }, [
     bot.running,
@@ -663,13 +673,6 @@ export default function App() {
     feed.client,
     feed.state,
     hopNextVolatility,
-    paper.session.open,
-    paper.orderPending,
-    signal,
-    bot.minColdGap,
-    bot.minSample,
-    bot.maxMomentumGap,
-    bot.side,
     menu,
   ]);
 
@@ -850,109 +853,84 @@ export default function App() {
       setTimerNote(
         `Using live good · ${volatilityTag(symbol)} · ${liveNow.label} · gap ${liveNow.watching.signalGap ?? "—"}`,
       );
-    } else {
+    } else if (fromOperator && feed.client && feed.state === "ready") {
+      // AI path still does a quick market pick for Matches.
       setScanningMarket(true);
-      setTimerNote(
-        fromOperator
-          ? "AI Operator · scanning markets…"
-          : "Scanning for good volatility (armed gap + sample)…",
-      );
-
+      setTimerNote("AI Operator · scanning markets…");
       try {
-        if (feed.client && feed.state === "ready") {
-          const scanBot = fromOperator
-            ? { ...botForStart, sidePreference: "matches" as const }
-            : {
-                ...botForStart,
-                sidePreference:
-                  botForStart.side === "DIGITDIFF"
-                    ? ("differs" as const)
-                    : ("matches" as const),
-              };
-          // Prefer an already-armed market so Start lands on good volatility.
-          const best = await findBestMarket(feed.client, scanBot, symbol, {
-            preferReady: !fromOperator,
-          });
-          if (!scanActiveRef.current) return;
-          const side = fromOperator
-            ? ("DIGITMATCH" as const)
-            : bot.autoSide
-              ? best.signal.side
-              : botForStart.side;
-          const digit =
-            fromOperator && best.signal.side !== "DIGITMATCH"
-              ? bot.prediction
-              : best.signal.digit;
-          startSignalRef.current = {
-            side,
-            digit,
-            label: fromOperator ? `Matches ${digit}` : best.signal.label,
-          };
-          setBot((current) => ({
-            ...current,
-            ...botForStart,
-            side,
-            prediction: digit,
-            autoFollow: true,
-            autoSide: fromOperator ? false : current.autoSide,
-            ...(fromOperator
-              ? {
-                  sidePreference: "matches" as const,
-                  martingale: false,
-                  requireFullConfirm: false,
-                  requireMultiWindow: false,
-                  requireWindowsEv: false,
-                  requireUneven: false,
-                  requireTiming: true,
-                  stake: Math.min(current.stake, 0.35),
-                  contracts: 1,
-                  cooldownTicks: Math.max(current.cooldownTicks, 8),
-                  maxTradesPerHour: Math.min(current.maxTradesPerHour || 60, 20),
-                  minSample: Math.min(current.minSample, 500),
-                }
-              : {}),
-          }));
-          const pickedSymbol = best.symbol;
-          if (pickedSymbol !== symbol) {
-            switchHoldRef.current = true;
-            setSymbol(pickedSymbol);
-            setTimerNote(
-              `Good vol · ${best.name} · loading live ticks…`,
-            );
-            const feedReady = await waitForSymbolFeed(
-              pickedSymbol,
-              botForStart.minSample,
-              () => feedSnapshotRef.current,
-              () => !scanActiveRef.current,
-            );
-            switchHoldRef.current = false;
-            if (!scanActiveRef.current) return;
-            if (!feedReady) {
-              setTimerNote(
-                `${best.name} · live feed not ready · start cancelled (no blind trade)`,
-              );
-              scanActiveRef.current = false;
-              setScanningMarket(false);
-              return;
-            }
-          }
-          const readyTag = isArmedSignal(best.signal) ? "Good" : "Best";
-          setTimerNote(
-            fromOperator
-              ? `AI · ${best.name} · Matches ${digit}`
-              : `${readyTag} · ${volatilityTag(best.symbol)} · ${best.signal.label}`,
-          );
-        } else if (scanActiveRef.current) {
-          feedAnalyzerToBot();
-          setTimerNote("Using current market · feed not ready for full scan");
-        }
-      } catch {
+        const best = await findBestMarket(
+          feed.client,
+          { ...botForStart, sidePreference: "matches" as const },
+          symbol,
+          { preferReady: true },
+        );
         if (!scanActiveRef.current) return;
+        const digit =
+          best.signal.side !== "DIGITMATCH" ? bot.prediction : best.signal.digit;
+        startSignalRef.current = {
+          side: "DIGITMATCH",
+          digit,
+          label: `Matches ${digit}`,
+        };
+        setBot((current) => ({
+          ...current,
+          ...botForStart,
+          side: "DIGITMATCH",
+          prediction: digit,
+          autoFollow: true,
+          autoSide: false,
+          sidePreference: "matches",
+          martingale: false,
+          requireFullConfirm: false,
+          requireMultiWindow: false,
+          requireWindowsEv: false,
+          requireUneven: false,
+          requireTiming: true,
+          stake: Math.min(current.stake, 0.35),
+          contracts: 1,
+          cooldownTicks: Math.max(current.cooldownTicks, 8),
+          maxTradesPerHour: Math.min(current.maxTradesPerHour || 60, 20),
+          minSample: Math.min(current.minSample, 500),
+        }));
+        if (best.symbol !== symbol) {
+          setSymbol(best.symbol);
+          await waitForSymbolFeed(
+            best.symbol,
+            80,
+            () => feedSnapshotRef.current,
+            () => !scanActiveRef.current,
+            8000,
+          );
+        }
+        setTimerNote(`AI · ${best.name} · Matches ${digit}`);
+      } catch {
         feedAnalyzerToBot();
-        setTimerNote("Market scan skipped · using current symbol");
+        setTimerNote("AI scan skipped · current symbol");
       } finally {
         setScanningMarket(false);
       }
+    } else {
+      // Differs desk: start hunting immediately and carousel volatilities —
+      // no 30s full-market scan that freezes the UI on one index.
+      const side = bot.autoSide ? liveNow.side : botForStart.side;
+      const digit = liveNow.digit;
+      startSignalRef.current = {
+        side,
+        digit,
+        label: liveNow.label,
+      };
+      setBot((current) => ({
+        ...current,
+        ...botForStart,
+        side,
+        prediction: digit,
+        autoFollow: true,
+        autoSide: current.autoSide,
+      }));
+      setScanningMarket(false);
+      setTimerNote(
+        `Hunting · cycling volatilities for Digits Good · now ${volatilityTag(symbol)}`,
+      );
     }
 
     if (!scanActiveRef.current) return;
