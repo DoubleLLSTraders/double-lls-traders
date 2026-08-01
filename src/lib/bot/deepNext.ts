@@ -1,9 +1,8 @@
 /**
  * Deep pre-flight before any order fires (first entry and follow-ups).
  *
- * Thresholds are calibrated against live R_75 ticks (scripts/calibrate-elite.ts):
- * Wilson-90 + gap≥14 + lead≥8 + margin≥1.5pp still arms; tighter stacks did not.
- * Caller stops on refusal (follow-ups) or waits (first entry).
+ * First entry follows the desk profile (settings): EV + timing + #1 cold.
+ * Follow-ups stay strict and bank after one win.
  */
 import { breakEvenDigitPercent, isLowPayoutSymbol } from "./performance";
 import {
@@ -28,13 +27,11 @@ export interface DeepNextContext {
   firstEntry?: boolean;
 }
 
-/** Extra cold-gap ticks beyond the form minimum (calibrated: +2 still fires). */
-const GAP_BUFFER = 2;
-/** Point-estimate cushion under break-even (pp). */
-const MIN_EV_CUSHION_PP = 0.2;
-const MIN_POWER = 90;
-/** One armed trade then bank — never press. */
+/** One trade then bank — never press. */
 export const MAX_WINS_BEFORE_BANK = 1;
+const MIN_LEAD_FIRST = 4;
+const MIN_LEAD_FOLLOW = 8;
+const MIN_POWER_FOLLOW = 90;
 
 export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict {
   const {
@@ -58,8 +55,6 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     return { ok: false, reason: `Deep · ${symbol} low payout · get out` };
   }
 
-  // Match the form / profile floor — do not raise above settings.minSample
-  // while the live signal window is built to that same size (see App tradeStats).
   if (signal.watching.sampleSize < settings.minSample) {
     return {
       ok: false,
@@ -110,13 +105,6 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     };
   }
 
-  if (!signal.uniqueEvOk) {
-    return {
-      ok: false,
-      reason: "Deep · runner-up also clears EV · not a unique barrier · get out",
-    };
-  }
-
   if (!signal.timingOk) {
     return {
       ok: false,
@@ -128,11 +116,13 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
   }
 
   const gap = signal.watching.signalGap;
-  const needGap = settings.minColdGap + GAP_BUFFER;
-  if (signal.side === "DIGITDIFF" && (gap === null || gap < needGap)) {
+  if (
+    signal.side === "DIGITDIFF" &&
+    (gap === null || gap < settings.minColdGap)
+  ) {
     return {
       ok: false,
-      reason: `Deep · cold gap ${gap ?? "—"} < ${needGap} (need clear absence) · get out`,
+      reason: `Deep · cold gap ${gap ?? "—"} < ${settings.minColdGap} · get out`,
     };
   }
 
@@ -143,18 +133,7 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     };
   }
 
-  const breakEven = breakEvenDigitPercent(signal.side, symbol);
-  if (signal.side === "DIGITDIFF") {
-    const cushion = breakEven - signal.digitPercent;
-    if (cushion < MIN_EV_CUSHION_PP) {
-      return {
-        ok: false,
-        reason: `Deep · only ${cushion.toFixed(1)}pp under break-even ${breakEven.toFixed(1)}% · get out`,
-      };
-    }
-  }
-
-  if (!signal.coldMarginOk || !signal.separationOk) {
+  if (signal.side === "DIGITDIFF" && (!signal.coldMarginOk || !signal.separationOk)) {
     return {
       ok: false,
       reason: `Deep · cold lead thin (${signal.watching.separation || "—"}) · get out`,
@@ -163,31 +142,55 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
 
   const sep = signal.watching.separation || "";
   const leadMatch = /cold −(\d+)/.exec(sep);
+  const needLead = firstEntry ? MIN_LEAD_FIRST : MIN_LEAD_FOLLOW;
   if (signal.side === "DIGITDIFF" && leadMatch) {
     const lead = Number(leadMatch[1]);
-    // Absolute lead floor matches signal.ts / calibrate-elite (lead ≥ 8).
-    // A pp×n floor (~23 at n=1500) was stricter than the live-calibrated bar.
-    if (lead < 8) {
+    if (lead < needLead) {
       return {
         ok: false,
-        reason: `Deep · cold lead only ${lead} ticks (need 8) · get out`,
+        reason: `Deep · cold lead only ${lead} ticks (need ${needLead}) · get out`,
       };
     }
   }
 
-  if (!signal.windowsAgree) {
+  // First entry: desk profile — EV + timing + #1 cold is enough.
+  if (firstEntry) {
+    const breakEven = breakEvenDigitPercent(signal.side, symbol);
+    if (signal.side === "DIGITDIFF") {
+      const cushion = breakEven - signal.digitPercent;
+      if (cushion < 0) {
+        return {
+          ok: false,
+          reason: `Deep · digit above break-even ${breakEven.toFixed(1)}% · get out`,
+        };
+      }
+    }
+    return {
+      ok: true,
+      summary: `Desk clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power}`,
+    };
+  }
+
+  // Follow-ups: keep the elite stack (rare / bank after one win anyway).
+  if (!signal.uniqueEvOk) {
+    return {
+      ok: false,
+      reason: "Deep · runner-up also clears EV · not a unique barrier · get out",
+    };
+  }
+  if (settings.requireMultiWindow && !signal.windowsAgree) {
     return {
       ok: false,
       reason: `Deep · windows split (${signal.watching.windowVotes || "—"}) · get out`,
     };
   }
-  if (!signal.windowsEvOk) {
+  if (settings.requireWindowsEv && !signal.windowsEvOk) {
     return {
       ok: false,
       reason: `Deep · multi-window EV failed (${signal.watching.windowEv || "—"}) · get out`,
     };
   }
-  if (!signal.structureOk) {
+  if (settings.requireUneven && !signal.structureOk) {
     return {
       ok: false,
       reason: "Deep · cold structure not decisive · get out",
@@ -195,7 +198,7 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
   }
 
   const score = confirmScore(signal);
-  if (!isArmedSignal(signal, MIN_POWER)) {
+  if (settings.requireFullConfirm && !isArmedSignal(signal, MIN_POWER_FOLLOW)) {
     return {
       ok: false,
       reason: `Deep · confirms ${score}/5 · confidence ${signal.confidence} · power ${signal.power} · get out`,
@@ -204,6 +207,6 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
 
   return {
     ok: true,
-    summary: `Deep clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power} · high`,
+    summary: `Deep clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power}`,
   };
 }

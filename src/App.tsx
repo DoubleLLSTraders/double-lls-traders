@@ -34,6 +34,7 @@ import {
   applyDiffersFastProfile,
   createDiffersFastBotSettings,
   DIFFERS_FAST_SYMBOL,
+  isDeskTradeReady,
   isDiffersFastProfile,
 } from "./lib/bot/differsProfile";
 import {
@@ -62,10 +63,10 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
  * Telling a genuine 12% digit from 10% noise needs ~865 samples at 95%
  * confidence, so anything shorter mostly confirms randomness.
  */
-const AGREEMENT_WINDOWS = [1000, 1500, 2000] as const;
+const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
-/** v31: trade signal uses ≥ minSample ticks so high/armed can fire. */
-const BOT_SETTINGS_VERSION = 31;
+/** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
+const BOT_SETTINGS_VERSION = 32;
 
 /** Wait for the feed to reload after switching volatility index. */
 async function waitForSymbolFeed(
@@ -258,7 +259,7 @@ export default function App() {
   const [symbol, setSymbol] = useState(() =>
     isLowPayoutSymbol(config.symbol) ? DIFFERS_FAST_SYMBOL : config.symbol,
   );
-  const [windowSize, setWindowSize] = useState<number>(1500);
+  const [windowSize, setWindowSize] = useState<number>(500);
   const [selectedDigit, setSelectedDigit] = useState<number | null>(null);
   const [bot, setBot] = useState<BotSettings>(() => loadBotSettings());
   const [timerNote, setTimerNote] = useState<string | null>(null);
@@ -289,10 +290,8 @@ export default function App() {
 
   // Preload more than the largest window so signals are valid immediately.
   const feed = useDerivFeed(symbol, 2500);
-  // Bot + Digits use ≥ minSample ticks. A shorter UI window used to feed the
-  // signal (often 1000) while gates demanded 1500 — Digits said Good·ready
-  // but high/armed could never clear, so the bot hunted forever.
-  const tradeWindow = Math.max(windowSize, bot.minSample, 1500);
+  // Bot + Digits use ≥ minSample ticks (desk floor, not a hard 1500).
+  const tradeWindow = Math.max(windowSize, bot.minSample);
   const tradeStats = useMemo(
     () => summarise(feed.digits.slice(-tradeWindow)),
     [feed.digits, tradeWindow],
@@ -763,13 +762,13 @@ export default function App() {
     scanActiveRef.current = true;
     if (!fromOperator) setMenu("market");
 
-    // If Digits already shows Trade now / Good on this volatility, Start uses
-    // that live state — do not scan away from an armed setup.
+    // If Digits already shows Good on this volatility, Start uses that live
+    // state — do not scan away from a desk-ready setup.
     const liveNow = signalRef.current;
     const useLiveGood =
       !fromOperator &&
       feed.state === "ready" &&
-      isArmedSignal(liveNow) &&
+      isDeskTradeReady(liveNow, botForStart) &&
       (botForStart.side === "DIGITDIFF"
         ? liveNow.side === "DIGITDIFF"
         : botForStart.autoSide || liveNow.side === botForStart.side);

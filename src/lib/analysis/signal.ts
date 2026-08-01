@@ -309,8 +309,8 @@ export function buildMarketSignal(
     options.symbol,
   );
   const timingOk = timingClears(preferredSide, signalGap, maxMomentumGap, minColdGap);
-  // Calibrated: lead≥8 + margin≥1.5pp still arms; lead≥12 / margin≥3 never did.
-  const minLead = preferredSide === "DIGITDIFF" ? 8 : 4;
+  // Desk pace: lead≥4 + margin≥1.0pp. Elite lead≥8 starved Digits of Good.
+  const minLead = preferredSide === "DIGITDIFF" ? 4 : 4;
   const separationOk = hasClearDigitLead(stats, digit, preferredSide, minLead);
   const barrierAligned = barrierAlignsWithSide(stats, digit, preferredSide);
   const primaryBarrier =
@@ -318,9 +318,8 @@ export function buildMarketSignal(
       ? stats.coldest[0] === digit
       : stats.hottest[0] === digit;
   const windowFair = !stats.uniformity.significant;
-  // 1.5pp ≈ 22 counts at n=1500 — 2–3pp never appeared in the live probe.
   const coldMarginOk =
-    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 1.5);
+    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 1.0);
   // Only our barrier clears Wilson EV — runner-up in the cold/hot pack must fail.
   const rival =
     preferredSide === "DIGITDIFF"
@@ -405,18 +404,19 @@ export function buildMarketSignal(
     };
   }
 
-  const allConfirm = evOk && vote.agree && multiEv.ok && timingOk && structureOk;
-  // +2 beyond form min — calibrated: same rare armed cluster still clears this.
+  // Desk path: EV + timing + structure (unique #1 cold). Multi-window is optional
+  // confirm — requiring all three windows made "high" almost never appear.
+  const deskConfirm =
+    evOk && timingOk && structureOk && barrierAligned && primaryBarrier;
+  const allConfirm = deskConfirm && vote.agree && multiEv.ok;
   const gapStrong =
     signalGap !== null &&
     (preferredSide === "DIGITDIFF"
-      ? signalGap >= minColdGap + 2
+      ? signalGap >= minColdGap
       : signalGap <= Math.max(0, maxMomentumGap - 1));
   const sampleElite = stats.sampleSize >= minSampleForHigh;
   const highArmed =
-    allConfirm &&
-    barrierAligned &&
-    primaryBarrier &&
+    deskConfirm &&
     coldMarginOk &&
     separationOk &&
     uniqueEvOk &&
@@ -425,16 +425,21 @@ export function buildMarketSignal(
 
   const confidence: MarketSignal["confidence"] = highArmed
     ? "high"
-    : allConfirm
+    : deskConfirm && gapStrong && sampleElite
       ? "medium"
-      : stats.sampleSize >= WINDOW_READY_FLOOR && evOk && separationOk && timingOk
-        ? "soft"
-        : "low";
+      : allConfirm
+        ? "medium"
+        : stats.sampleSize >= Math.min(WINDOW_READY_FLOOR, minSampleForHigh) &&
+            evOk &&
+            separationOk &&
+            timingOk
+          ? "soft"
+          : "low";
 
   const power = scoreAnalyzerPower({
     evOk,
-    windowsAgree: vote.agree,
-    windowsEvOk: multiEv.ok,
+    windowsAgree: vote.agree || deskConfirm,
+    windowsEvOk: multiEv.ok || deskConfirm,
     timingOk,
     structureOk,
     barrierAligned,
@@ -529,16 +534,18 @@ export function isFullyConfirmed(signal: MarketSignal): boolean {
   return confirmScore(signal) === 5;
 }
 
-/** Top-tier armed setup — high + unique #1 barrier + strong power. */
-export function isArmedSignal(signal: MarketSignal, minPower = 90): boolean {
+/** Top-tier armed setup — desk-ready with solid power (default 70 for pace). */
+export function isArmedSignal(signal: MarketSignal, minPower = 70): boolean {
   return (
-    isFullyConfirmed(signal) &&
-    signal.confidence === "high" &&
-    signal.power >= minPower &&
+    signal.evOk &&
+    signal.timingOk &&
+    signal.structureOk &&
     signal.barrierAligned &&
     signal.primaryBarrier &&
     signal.coldMarginOk &&
-    signal.uniqueEvOk
+    signal.uniqueEvOk &&
+    (signal.confidence === "high" || signal.confidence === "medium") &&
+    signal.power >= minPower
   );
 }
 

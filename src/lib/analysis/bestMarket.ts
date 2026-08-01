@@ -24,10 +24,10 @@ const SCAN_MARKETS = [
   { symbol: "R_75", name: "Volatility 75 Index" },
 ] as const;
 
-const SCAN_COUNT = 2500;
-const WINDOW_SIZES = [1000, 1500, 2000] as const;
-/** Primary window for ranking — matches calibrated sample floor. */
-const PRIMARY_WINDOW = 1500;
+const SCAN_COUNT = 1200;
+const WINDOW_SIZES = [500, 1000, 1500] as const;
+/** Primary window for ranking — matches desk sample floor. */
+const PRIMARY_WINDOW = 500;
 
 export interface MarketScanResult {
   symbol: string;
@@ -180,8 +180,7 @@ function isTradeReady(
 ): boolean {
   const prefersDiffers =
     sidePreference === "differs" || sidePreference === "winrate";
-  if (!isArmedSignal(signal)) return false;
-  if (!signal.timingOk || !signal.barrierAligned || !signal.primaryBarrier) {
+  if (!signal.timingOk || !signal.evOk || !signal.barrierAligned || !signal.primaryBarrier) {
     return false;
   }
   if (prefersDiffers) {

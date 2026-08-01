@@ -35,8 +35,10 @@ export function readMarketPulse(
   signal?: MarketSignal | null,
   requirements?: PulseRequirements,
 ): MarketPulse {
+  const minGap = requirements?.minColdGap ?? 6;
+  const minSample = requirements?.minSample ?? 500;
   const need = formatPulseNeed(
-    requirements ?? { minColdGap: 14, minSample: 1500 },
+    requirements ?? { minColdGap: minGap, minSample },
   );
   const withNeed = (
     mood: MarketMood,
@@ -69,34 +71,29 @@ export function readMarketPulse(
   const countLead = (counts[rival] ?? 0) - (counts[cold] ?? 0);
   const marginPp = rivalPct - coldPct;
   const spread = hotPct - coldPct;
-  const minGap = requirements?.minColdGap ?? 14;
 
   const signalGap = signal?.watching.signalGap ?? coldGap;
   const signalDigit = signal?.digit ?? cold;
   const differs =
     !signal || signal.side === "DIGITDIFF" ? signal : null;
 
-  // ── Only claim ready when the bot gates can pass ─────────────────────
-
-  if (differs && isArmedSignal(differs)) {
-    return withNeed(
-      "good",
-      "Trade now",
-      `Differs ${differs.digit} · gap ${signalGap ?? "—"} · ${differs.digitPercent.toFixed(1)}% · power ${differs.power}`,
-    );
-  }
-
-  if (
-    differs &&
-    differs.confidence === "high" &&
-    differs.timingOk &&
+  const deskGood =
+    !!differs &&
     differs.evOk &&
-    differs.barrierAligned
-  ) {
+    differs.timingOk &&
+    differs.barrierAligned &&
+    differs.primaryBarrier &&
+    differs.coldMarginOk &&
+    sampleSize >= minSample &&
+    (signalGap ?? 0) >= minGap;
+
+  // ── Ready when the desk bot can fire ─────────────────────────────────
+
+  if (differs && (isArmedSignal(differs) || deskGood)) {
     return withNeed(
       "good",
-      "Good market",
-      `Cold ${differs.digit} armed path · gap ${signalGap} · power ${differs.power}`,
+      isArmedSignal(differs) ? "Trade now" : "Good market",
+      `Differs ${differs.digit} · gap ${signalGap ?? "—"}/${minGap} · ${differs.digitPercent.toFixed(1)}% · power ${differs.power}`,
     );
   }
 
@@ -105,14 +102,12 @@ export function readMarketPulse(
     differs.evOk &&
     differs.timingOk &&
     differs.barrierAligned &&
-    differs.windowsAgree &&
-    differs.structureOk &&
-    (signalGap ?? 0) >= 4
+    (signalGap ?? 0) >= Math.max(3, minGap - 2)
   ) {
     return withNeed(
       "watch",
       "Almost",
-      `Differs ${differs.digit} · ${differs.confidence} · power ${differs.power} · need high/armed`,
+      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · ${differs.confidence} · power ${differs.power}`,
     );
   }
 
