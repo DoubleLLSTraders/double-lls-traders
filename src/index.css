@@ -78,6 +78,12 @@
   --shadow-panel: rgba(0, 0, 0, 0.35);
   --shadow-tile: rgba(0, 0, 0, 0.25);
 
+  --scroll-size: 6px;
+  --scroll-track: transparent;
+  --scroll-thumb: rgba(255, 255, 255, 0.16);
+  --scroll-thumb-hover: rgba(0, 255, 128, 0.5);
+  --scroll-thumb-active: rgba(0, 255, 128, 0.72);
+
   --font-display: "Syne", "Outfit", system-ui, sans-serif;
   --font-ui: "Outfit", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -162,6 +168,11 @@ html[data-theme="light"] {
   --shadow-panel: rgba(0, 0, 0, 0.06);
   --shadow-tile: rgba(0, 0, 0, 0.08);
 
+  --scroll-track: transparent;
+  --scroll-thumb: rgba(0, 0, 0, 0.18);
+  --scroll-thumb-hover: rgba(0, 200, 83, 0.55);
+  --scroll-thumb-active: rgba(0, 200, 83, 0.72);
+
   color-scheme: light;
   background: var(--bg);
   color: var(--text);
@@ -178,6 +189,81 @@ html[data-theme="light"] {
 html {
   overflow-x: hidden;
   -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ── Global scrollbars — thin, no arrows, theme-aware ── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+*::-webkit-scrollbar {
+  width: var(--scroll-size);
+  height: var(--scroll-size);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.18s ease;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scroll-thumb-active);
+}
+
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:where(
+  .modal__card,
+  .settings-modal__panel,
+  .ai-pane,
+  .ai-shell,
+  .bot-panel,
+  .analyzer-panel,
+  .trades__table,
+  .market-menu__list,
+  .system-status,
+  .auth-screen
+) {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+:where(.modal__card, .settings-modal__panel, .ai-pane, .bot-panel, .analyzer-panel) {
+  scrollbar-gutter: stable;
 }
 
 html,
@@ -2556,23 +2642,9 @@ html[data-theme="light"] .market-menu {
   overflow: auto;
   max-height: 280px;
   padding: 6px;
-}
-
-.market-menu__list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.market-menu__list::-webkit-scrollbar-track {
-  background: #f0f0f0;
-}
-
-.market-menu__list::-webkit-scrollbar-thumb {
-  background: #c4c4c4;
-  border-radius: 3px;
-}
-
-.market-menu__list::-webkit-scrollbar-thumb:hover {
-  background: #a8a8a8;
+  --scroll-track: rgba(0, 0, 0, 0.04);
+  --scroll-thumb: rgba(0, 0, 0, 0.16);
+  --scroll-thumb-hover: rgba(0, 200, 83, 0.45);
 }
 
 .market-option {
@@ -2783,6 +2855,14 @@ html[data-theme="light"] .market-menu {
   font-size: 14px;
   font-weight: 700;
   letter-spacing: -0.02em;
+}
+
+.tick-chart__sync {
+  font-style: normal;
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--ink-soft);
+  letter-spacing: 0;
 }
 
 .tick-chart__price-line {
@@ -4857,34 +4937,11 @@ html[data-theme="light"] .tick-chart__frame {
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
   box-shadow: none;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(94, 234, 212, 0.55) #0b2f2c;
-}
-
-.analyzer-panel::-webkit-scrollbar {
-  width: 8px;
-}
-
-.analyzer-panel::-webkit-scrollbar-track {
-  background: #0b2f2c;
-  border-radius: 8px;
-  margin: 6px 0;
-}
-
-.analyzer-panel::-webkit-scrollbar-thumb {
-  background: #5eead4;
-  border-radius: 8px;
-  border: 2px solid #0b2f2c;
-}
-
-.analyzer-panel::-webkit-scrollbar-thumb:hover {
-  background: #99f6e4;
-}
-
-.analyzer-panel::-webkit-scrollbar-corner {
-  background: transparent;
+  --scroll-track: rgba(0, 0, 0, 0.15);
+  --scroll-thumb: rgba(94, 234, 212, 0.45);
+  --scroll-thumb-hover: rgba(153, 246, 228, 0.85);
+  --scroll-thumb-active: #99f6e4;
 }
 
 .analyzer-panel .analyzer-panel__head h3,
@@ -6609,6 +6666,7 @@ html[data-theme="light"] .tick-chart__frame {
 .settings-modal__panel {
   overflow-y: auto;
   max-height: min(70vh, 560px);
+  padding-right: 2px;
 }
 
 .settings-modal__section {
@@ -7019,6 +7077,24 @@ html[data-theme="light"] .tick-chart__frame {
   font-family: var(--font-mono, "JetBrains Mono", monospace);
   font-size: 9px;
   word-break: break-all;
+}
+
+.system-status__endpoint--link {
+  color: var(--green-bright);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.system-status__endpoint--link:hover {
+  color: var(--green);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.system-status__endpoint--link:focus-visible {
+  outline: 2px solid rgba(0, 255, 128, 0.45);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 .system-status__metrics {

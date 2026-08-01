@@ -3,8 +3,7 @@ import react from "@vitejs/plugin-react";
 
 // GitHub Pages: https://doublellstraders.github.io/double-lls-traders/
 const PAGES_REPO = process.env.GITHUB_PAGES_REPO ?? "double-lls-traders";
-const isPagesBuild =
-  process.env.GITHUB_PAGES === "true" && process.env.npm_lifecycle_event === "build";
+const isPagesBuild = process.env.GITHUB_PAGES === "true";
 const base = isPagesBuild ? `/${PAGES_REPO}/` : "/";
 
 /** Redirect old bookmark paths to the current base path. */

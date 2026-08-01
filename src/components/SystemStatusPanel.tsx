@@ -30,6 +30,26 @@ function formatChecked(ms: number): string {
   }).format(ms);
 }
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function StatusEndpoint({ value }: { value: string }) {
+  if (isHttpUrl(value)) {
+    return (
+      <a
+        className="system-status__endpoint system-status__endpoint--link"
+        href={value.trim()}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        {value}
+      </a>
+    );
+  }
+  return <code className="system-status__endpoint">{value}</code>;
+}
+
 export function SystemStatusPanel({ feedState, feedError, email, active }: SystemStatusPanelProps) {
   const [report, setReport] = useState<PlatformHealthReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -117,7 +137,7 @@ export function SystemStatusPanel({ feedState, feedError, email, active }: Syste
               <div>
                 <strong>{component.name}</strong>
                 <small>{component.detail}</small>
-                <code className="system-status__endpoint">{component.endpoint}</code>
+                <StatusEndpoint value={component.endpoint} />
               </div>
               <div className="system-status__metrics">
                 <span className={`system-status__uptime system-status__uptime--${component.level}`}>
