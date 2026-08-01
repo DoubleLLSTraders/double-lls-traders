@@ -1,6 +1,7 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import type { BotSession } from "../lib/bot/types";
 import type { PerformanceStats } from "../lib/bot/performance";
+import { downloadTradesPdf } from "../lib/bot/exportTradesPdf";
 import {
   clearTrades,
   getTrades,
@@ -41,6 +42,7 @@ export function TradesPanel({
   symbol,
 }: TradesPanelProps) {
   const trades = useSyncExternalStore(subscribeTrades, getTrades, getTrades);
+  const [exporting, setExporting] = useState(false);
 
   const totals = useMemo(() => {
     let wins = 0;
@@ -88,6 +90,33 @@ export function TradesPanel({
               {money(totals.pnl)} {currency}
             </strong>
           </div>
+          <button
+            type="button"
+            className="trades__pdf"
+            disabled={exporting || trades.length === 0}
+            onClick={() => {
+              setExporting(true);
+              void downloadTradesPdf(trades, {
+                trades: totals.trades,
+                wins: totals.wins,
+                losses: totals.losses,
+                pnl: totals.pnl,
+                winRate: totals.winRate,
+                expectancy: totals.expectancy,
+                sessionPnl: session.pnl,
+                breakEvenWinRate: performance.breakEvenWinRate,
+                currency,
+              })
+                .catch((err: unknown) => {
+                  const message =
+                    err instanceof Error ? err.message : String(err);
+                  window.alert(`PDF export failed · ${message}`);
+                })
+                .finally(() => setExporting(false));
+            }}
+          >
+            {exporting ? "Preparing PDF…" : "Download PDF"}
+          </button>
           {trades.length > 0 ? (
             <button
               type="button"

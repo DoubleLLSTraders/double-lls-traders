@@ -5,12 +5,9 @@ import {
   readMarketPulse,
   type PulseRequirements,
 } from "../lib/analysis/marketPulse";
+import type { AnalyzerDirective } from "../lib/analysis/analyzerDirector";
 import type { MarketSignal } from "../lib/analysis/signal";
-import {
-  playGoodSetupSound,
-  playAlmostSetupSound,
-  unlockAudio,
-} from "../lib/sound";
+import { playGoodSetupSound, unlockAudio } from "../lib/sound";
 
 type Tone = "high" | "second" | "low" | "neutral";
 
@@ -22,6 +19,10 @@ interface DigitBarsProps {
   latestDigit?: number | null;
   /** Live analyzer signal — sharpens the market mood readout. */
   signal?: MarketSignal | null;
+  /** Steady-lock director — Digits Good only when desk may follow. */
+  director?: AnalyzerDirective | null;
+  /** Market symbol — resets alerts when volatility hops. */
+  symbol?: string;
   /** Bot gate floors shown as “Good needs …”. */
   requirements?: PulseRequirements;
 }
@@ -55,6 +56,8 @@ export function DigitBars({
   onSelectDigit,
   latestDigit = null,
   signal = null,
+  director = null,
+  symbol = "",
   requirements,
 }: DigitBarsProps) {
   const { counts, percentages, sampleSize, gaps, hottest, coldest } = stats;
@@ -62,31 +65,65 @@ export function DigitBars({
   const maxPct = Math.max(...percentages, 10);
   const [pulseDigit, setPulseDigit] = useState<number | null>(null);
   const [hoverDigit, setHoverDigit] = useState<number | null>(null);
-  const pulse = useMemo(
+  const basePulse = useMemo(
     () => readMarketPulse(stats, signal, requirements),
     [stats, signal, requirements],
   );
+  const pulse = useMemo(() => {
+    if (!director) return basePulse;
+    if (director.buyNow) {
+      return {
+        ...basePulse,
+        mood: "good" as const,
+        label: "Trade now",
+        detail: director.detail,
+      };
+    }
+    if (director.label === "Locking" || director.label === "Almost") {
+      return {
+        ...basePulse,
+        mood: "watch" as const,
+        label: director.label,
+        detail: director.detail,
+      };
+    }
+    return {
+      ...basePulse,
+      label: director.label === "Watch" ? basePulse.label : director.label,
+      detail: director.detail || basePulse.detail,
+    };
+  }, [basePulse, director]);
   const alertKeyRef = useRef("");
+  const symbolAlertRef = useRef(symbol);
 
-  // Fire alert from the Digits panel itself — what you see is what beeps.
+  // Sound only when Digits shows Trade now (desk may buy).
   useEffect(() => {
-    const key = `${pulse.mood}|${pulse.label}|${signal?.digit ?? ""}`;
-    if (pulse.mood === "good") {
-      if (alertKeyRef.current !== key) {
-        alertKeyRef.current = key;
-        void playGoodSetupSound();
+    if (symbolAlertRef.current !== symbol) {
+      symbolAlertRef.current = symbol;
+      alertKeyRef.current = "";
+    }
+    const tradeNow =
+      pulse.label === "Trade now" ||
+      (director?.buyNow === true && pulse.mood === "good");
+    if (!tradeNow) {
+      if (pulse.label !== "Locking" && pulse.mood !== "good") {
+        alertKeyRef.current = "";
       }
       return;
     }
-    if (pulse.label === "Almost") {
-      if (alertKeyRef.current !== key) {
-        alertKeyRef.current = key;
-        void playAlmostSetupSound();
-      }
-      return;
-    }
-    alertKeyRef.current = "";
-  }, [pulse.mood, pulse.label, signal?.digit]);
+    const digit = director?.digit ?? signal?.digit ?? "";
+    const key = `${symbol}|trade-now|${digit}`;
+    if (alertKeyRef.current === key) return;
+    alertKeyRef.current = key;
+    void playGoodSetupSound();
+  }, [
+    pulse.mood,
+    pulse.label,
+    director?.buyNow,
+    director?.digit,
+    signal?.digit,
+    symbol,
+  ]);
 
   useEffect(() => {
     if (latestDigit === null || latestDigit === undefined) return;
@@ -199,19 +236,17 @@ export function DigitBars({
           <span className="digit-map__pulse-dot" aria-hidden="true" />
           <strong>{pulse.label}</strong>
           <em>{pulse.detail}</em>
-          {pulse.mood === "good" || pulse.label === "Almost" ? (
-            <button
-              type="button"
-              className="digit-map__alert-btn"
-              onClick={() => {
-                unlockAudio();
-                if (pulse.mood === "good") playGoodSetupSound();
-                else playAlmostSetupSound();
-              }}
-            >
-              🔔 Sound
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="digit-map__alert-btn"
+            title="Enable browser sound (required once)"
+            onClick={() => {
+              unlockAudio();
+              playGoodSetupSound();
+            }}
+          >
+            🔔 Sound
+          </button>
         </div>
         <div className="digit-map__legend">
           <span className="is-high">Hot</span>

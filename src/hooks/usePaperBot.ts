@@ -6,9 +6,8 @@ import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade"
 import type { MarketSignal } from "../lib/analysis/signal";
 import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
-import { liveTapeAllowsEntry } from "../lib/analysis/analyzerGate";
-import { capStake, evaluateEntry, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
-import { analyzeNextPredictionDeep } from "../lib/bot/deepNext";
+import { isAnalyzerGood } from "../lib/analysis/analyzerGate";
+import { capStake, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
 import { playLossSound, playWinSound } from "../lib/sound";
@@ -16,6 +15,7 @@ import {
   DIFF_PAYOUT_MULTIPLIER,
   MATCH_PAYOUT_MULTIPLIER,
   computePerformance,
+  isLowPayoutSymbol,
   profitRate,
   settleContractPnl,
   type PerformanceStats,
@@ -72,17 +72,6 @@ function tradesLastHour(openEpochs: number[], nowEpoch: number): number {
   return openEpochs.filter((epoch) => epoch >= cutoff).length;
 }
 
-function drawdownPercent(session: BotSession, balance: number | null): number {
-  if (session.maxDrawdown <= 0) return 0;
-  const basis =
-    session.peakPnl > 0
-      ? session.peakPnl
-      : balance !== null && balance > 0
-        ? balance
-        : Math.max(1, Math.abs(session.pnl) + session.maxDrawdown);
-  return (session.maxDrawdown / basis) * 100;
-}
-
 export function usePaperBot(options: {
   running: boolean;
   settings: BotSettings;
@@ -93,6 +82,10 @@ export function usePaperBot(options: {
   balance: number | null;
   symbol: string;
   client: DerivClient | null;
+  /** Digits director locked — buy this digit on this tick. */
+  analyzerBuyNow?: boolean;
+  analyzerDigit?: number;
+  analyzerSide?: MarketSignal["side"];
   onSettings: (next: Partial<BotSettings>) => void;
   onStop: (reason: string) => void;
   /**
@@ -121,6 +114,9 @@ export function usePaperBot(options: {
     balance,
     symbol,
     client,
+    analyzerBuyNow = false,
+    analyzerDigit,
+    analyzerSide,
     onSettings,
     onStop,
     onSwitchMarket,
@@ -173,6 +169,17 @@ export function usePaperBot(options: {
   const stuckSkipsRef = useRef(0);
   const lastSwitchEpochRef = useRef(0);
   const symbolRef = useRef(symbol);
+  const analyzerBuyNowRef = useRef(analyzerBuyNow);
+  const analyzerDigitRef = useRef(analyzerDigit);
+  const analyzerSideRef = useRef(analyzerSide);
+  analyzerBuyNowRef.current = analyzerBuyNow;
+  analyzerDigitRef.current = analyzerDigit;
+  analyzerSideRef.current = analyzerSide;
+  /**
+   * After Start: skip the first Digits Trade now streak, buy on the second.
+   * Keeps the desk synced instead of chasing a signal that was already live.
+   */
+  const syncPhaseRef = useRef<"await-first" | "skip-first" | "live">("await-first");
 
   const entriesBlocked = () =>
     !runningRef.current ||
@@ -260,6 +267,7 @@ export function usePaperBot(options: {
     pnlThisStartRef.current = 0;
     stuckSkipsRef.current = 0;
     lastSwitchEpochRef.current = 0;
+    syncPhaseRef.current = "await-first";
     setRunsThisStart(0);
     setPnlThisStart(0);
 
@@ -274,12 +282,12 @@ export function usePaperBot(options: {
     setLog((lines) =>
       pushLog(
         lines,
-        `Started · ${modeLabel} · ${settings.side === "DIGITMATCH" ? "Matches" : "Differs"} · ${settings.contracts}× ${settings.stake.toFixed(2)} · sample≥${settings.minSample}${
+        `Started · ${modeLabel} · ${settings.side === "DIGITMATCH" ? "Matches" : "Differs"} · ${settings.contracts}× ${settings.stake.toFixed(2)} · sample≥${settings.minSample} · skip 1st Trade now${
           limits ? ` · ${limits}` : ""
         }`,
       ),
     );
-    setWaitReason("Hunting entry · waiting for EV gate…");
+    setWaitReason("Follow · sync · will skip first Trade now…");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
@@ -326,8 +334,18 @@ export function usePaperBot(options: {
       return;
     }
 
-    // A settled live basket must be processed even without a fresh tick.
-    if (latest && handledEpoch.current === latest.epoch && !liveOutcome && !hasOpen) return;
+    // Same tick already processed — still continue when Digits flips to Trade now
+    // (director can arm after the first pass of this epoch).
+    const digitsBuyNow = analyzerBuyNowRef.current === true;
+    if (
+      latest &&
+      handledEpoch.current === latest.epoch &&
+      !liveOutcome &&
+      !hasOpen &&
+      !digitsBuyNow
+    ) {
+      return;
+    }
     if (latest) handledEpoch.current = latest.epoch;
 
     let nextSettings = settingsRef.current;
@@ -668,169 +686,102 @@ export function usePaperBot(options: {
       }
 
       const hourCount = tradesLastHour(nextSession.openEpochs, latest.epoch);
-      const lastEntryDigitPrinted =
-        nextSession.lastEntryDigit === null || nextSession.lastEntryEpoch === null
-          ? true
-          : ticks.some(
-              (tick) =>
-                tick.epoch > nextSession.lastEntryEpoch! &&
-                tick.digit === nextSession.lastEntryDigit,
-            );
       const runsDoneNow = nextSession.trades - runOriginRef.current.trades;
 
-      // Deep-analyze every prediction (first entry waits; follow-ups stop).
-      {
-        const lastPrinted =
-          nextSession.lastEntryDigit === null || nextSession.lastEntryEpoch === null
-            ? true
-            : ticks.some(
-                (tick) =>
-                  tick.epoch > nextSession.lastEntryEpoch! &&
-                  tick.digit === nextSession.lastEntryDigit,
-              );
-        const deep = analyzeNextPredictionDeep({
-          signal: liveSignal,
-          settings: nextSettings,
-          symbol,
-          lastEntryDigit: nextSession.lastEntryDigit,
-          lastEntryDigitPrinted: lastPrinted,
-          winsThisStart: nextSession.wins,
-          coolBarrierDigit: nextSession.coolBarrierDigit,
-          firstEntry: runsDoneNow < 1,
-        });
-        if (!deep.ok) {
-          if (deep.stop) {
-            onStopRef.current(deep.reason);
-            setLog((lines) =>
-              pushLog(lines, `STOPPED · ${deep.reason}`),
-            );
-            return;
-          }
-          nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
-          setSession(nextSession);
-          setWaitReason(deep.reason.replace(/^Deep ·/, "Wait ·"));
-          if (nextSession.skipped % 5 === 1) {
-            setLog((lines) => pushLog(lines, deep.reason));
-          }
-          stuckSkipsRef.current += 1;
-          if (stuckSkipsRef.current >= 3) {
-            stuckSkipsRef.current = 0;
-            if (onSwitchMarketRef.current) {
-              setWaitReason("Market slow · next volatility…");
-              setLog((lines) =>
-                pushLog(lines, "ROTATE · bad market · next volatility"),
-              );
-              onSwitchMarketRef.current("Bad market · next volatility");
-            }
-          }
+      // Pure follower: Digits Trade now owns digit/side — no desk research.
+      const followDigit = analyzerDigitRef.current ?? liveSignal.digit;
+      const followSide = analyzerSideRef.current ?? liveSignal.side;
+      const buyNow = analyzerBuyNowRef.current === true;
+      const sideLabel =
+        followSide === "DIGITMATCH" ? "Matches" : "Differs";
+
+      // Start sync: ignore the first Trade now streak; buy on the next one.
+      if (syncPhaseRef.current === "await-first") {
+        if (buyNow) {
+          syncPhaseRef.current = "skip-first";
+          setWaitReason(
+            `Follow · sync · skip 1st Trade now · ${sideLabel} ${followDigit}`,
+          );
+          setLog((lines) =>
+            pushLog(
+              lines,
+              `SYNC · skip first Trade now · ${sideLabel} ${followDigit} · wait next`,
+            ),
+          );
           return;
         }
-        if (runsDoneNow < 1 && nextSession.skipped % 8 === 0) {
-          setLog((lines) => pushLog(lines, `ARMED · ${deep.summary}`));
+        setWaitReason(
+          `Follow · sync · waiting first Trade now · ${sideLabel} ${followDigit}`,
+        );
+        return;
+      }
+      if (syncPhaseRef.current === "skip-first") {
+        if (!buyNow) {
+          syncPhaseRef.current = "live";
+          setWaitReason(
+            `Follow · synced · waiting next Trade now · ${sideLabel} ${followDigit}`,
+          );
+          setLog((lines) =>
+            pushLog(lines, "SYNC · first Trade now cleared · next one buys"),
+          );
+          return;
         }
+        setWaitReason(
+          `Follow · sync · skip 1st Trade now · ${sideLabel} ${followDigit}`,
+        );
+        return;
       }
 
-      const gate = evaluateEntry(nextSettings, liveSignal, {
-        tradesLastHour: hourCount,
-        drawdownPercent: drawdownPercent(nextSession, liveBalance),
-        lastEntryDigit: nextSession.lastEntryDigit,
-        lastEntryDigitPrinted,
-        coolBarrierDigit: nextSession.coolBarrierDigit,
-        balance: liveBalance,
-        symbol,
-      });
-      if (!gate.ok) {
+      if (!buyNow) {
         nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
         setSession(nextSession);
-        setWaitReason(gate.reason);
-        if (nextSession.skipped % 5 === 1) {
-          setLog((lines) => pushLog(lines, gate.reason));
-        }
-
-        // Analyzer / Almost / Building holds must rotate — including "Skip · gap"
-        // and "Skip · cold lead" which used to never increment the stuck counter.
-        const holdSkip =
-          !gate.reason.startsWith("Skip · max") &&
-          !gate.reason.startsWith("Skip · drawdown") &&
-          !gate.reason.startsWith("Skip · balance") &&
-          !gate.reason.startsWith("Wait · re-backing");
-        if (holdSkip) {
+        setWaitReason(
+          `Follow · waiting Digits Trade now · ${sideLabel} ${followDigit}`,
+        );
+        if (!isAnalyzerGood(liveSignal, nextSettings)) {
           stuckSkipsRef.current += 1;
+          if (stuckSkipsRef.current >= 20 && onSwitchMarketRef.current) {
+            stuckSkipsRef.current = 0;
+            setWaitReason("Analyzer · tape dead · next market…");
+            setLog((lines) =>
+              pushLog(lines, "ROTATE · analyzer hunting better market"),
+            );
+            onSwitchMarketRef.current("Hunting · next volatility");
+          }
         } else {
           stuckSkipsRef.current = 0;
         }
-        if (stuckSkipsRef.current >= 3) {
-          stuckSkipsRef.current = 0;
-          if (onSwitchMarketRef.current) {
-            setWaitReason("Market slow · next volatility…");
-            setLog((lines) =>
-              pushLog(lines, "ROTATE · bad market · next volatility"),
-            );
-            onSwitchMarketRef.current("Bad market · next volatility");
-          } else {
-            onStopRef.current("Deep · first setup never cleared · stopped");
-            setLog((lines) =>
-              pushLog(lines, "STOPPED · first setup never cleared · get out"),
-            );
-          }
-          return;
-        }
+        return;
+      }
+
+      // Run / money stops only — never re-back waits or deep research.
+      if (nextSettings.maxRuns > 0 && runsDoneNow >= nextSettings.maxRuns) {
+        onStopRef.current(
+          `Stopped · ${runsDoneNow}/${nextSettings.maxRuns} runs complete.`,
+        );
+        return;
+      }
+      if (
+        nextSettings.maxTradesPerHour > 0 &&
+        hourCount >= nextSettings.maxTradesPerHour
+      ) {
+        setWaitReason(`Skip · max ${nextSettings.maxTradesPerHour} trades/hour`);
+        return;
+      }
+      if (isLowPayoutSymbol(symbol)) {
+        onSwitchMarketRef.current?.("Low payout · next volatility");
+        return;
+      }
+      // Same tick the barrier prints — Digits drops Trade now; do not buy late.
+      if (followSide === "DIGITDIFF" && latest.digit === followDigit) {
+        setWaitReason(`Follow · Digits reset · ${followDigit} printed`);
         return;
       }
 
       stuckSkipsRef.current = 0;
 
-      // Fire-time deep re-check — first entry and follow-ups.
-      {
-        const fireDeep = analyzeNextPredictionDeep({
-          signal: liveSignal,
-          settings: nextSettings,
-          symbol,
-          lastEntryDigit: nextSession.lastEntryDigit,
-          lastEntryDigitPrinted,
-          winsThisStart: nextSession.wins,
-          coolBarrierDigit: nextSession.coolBarrierDigit,
-          firstEntry: runsDoneNow < 1,
-        });
-        if (!fireDeep.ok) {
-          if (fireDeep.stop) {
-            onStopRef.current(fireDeep.reason);
-            setLog((lines) =>
-              pushLog(lines, `STOPPED · faded at fire · ${fireDeep.reason}`),
-            );
-            return;
-          }
-          nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
-          setSession(nextSession);
-          setWaitReason(fireDeep.reason.replace(/^Deep ·/, "Wait ·"));
-          return;
-        }
-      }
-
-      // Live tape must still match Digits Good on this tick — no stale buy.
-      const tape = liveTapeAllowsEntry(
-        liveSignal,
-        nextSettings,
-        ticks.map((tick) => tick.digit),
-      );
-      if (!tape.ok) {
-        nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
-        setSession(nextSession);
-        setWaitReason(tape.reason.replace(/^Analyzer ·/, "Wait ·"));
-        if (nextSession.skipped % 5 === 1) {
-          setLog((lines) => pushLog(lines, tape.reason));
-        }
-        stuckSkipsRef.current += 1;
-        if (stuckSkipsRef.current >= 5 && onSwitchMarketRef.current) {
-          stuckSkipsRef.current = 0;
-          setWaitReason("Market faded · searching next volatility…");
-          onSwitchMarketRef.current("Faded Good · searching next volatility…");
-        }
-        return;
-      }
-
       setWaitReason(
-        `Opening · analyzer Good · ${liveSignal.side === "DIGITMATCH" ? "Matches" : "Differs"} ${liveSignal.digit}`,
+        `Opening · Digits Trade now · ${followSide === "DIGITMATCH" ? "Matches" : "Differs"} ${followDigit}`,
       );
 
       if (entriesBlocked()) {
@@ -848,23 +799,9 @@ export function usePaperBot(options: {
         liveBalance,
       );
       const mode = config.mode === "live" ? "live" : "paper";
-      // Taken from the signal the gate just approved — never a stale prediction.
-      const side = nextSettings.autoSide ? liveSignal.side : nextSettings.side;
-      const digit =
-        nextSettings.autoFollow || nextSettings.autoSide
-          ? liveSignal.digit
-          : nextSettings.prediction;
-      if (
-        digit !== liveSignal.digit ||
-        side !== liveSignal.side
-      ) {
-        nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
-        setSession(nextSession);
-        setWaitReason(
-          `Skip · bot digit ${digit} ≠ analyzed ${liveSignal.side === "DIGITMATCH" ? "Matches" : "Differs"} ${liveSignal.digit}`,
-        );
-        return;
-      }
+      // Exact Digits lock — realtime follow, no second guess.
+      const side = followSide;
+      const digit = followDigit;
       const contracts = nextSettings.contracts;
       const duration = nextSettings.duration;
       const entryEpoch = latest.epoch;
@@ -1037,9 +974,21 @@ export function usePaperBot(options: {
 
       applyOpen();
     }
+    // analyzerBuyNow must be a dep: Digits Trade now often arms on the same
+    // tick after the first effect pass — without it the desk stays on "waiting".
     // onSettings/onStop are intentionally absent: they are read through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, ticks, liveOutcome, currency, config, symbol]);
+  }, [
+    running,
+    ticks,
+    liveOutcome,
+    currency,
+    config,
+    symbol,
+    analyzerBuyNow,
+    analyzerDigit,
+    analyzerSide,
+  ]);
 
   const performance = computePerformance({
     ...session,

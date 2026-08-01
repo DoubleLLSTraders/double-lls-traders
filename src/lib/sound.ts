@@ -94,6 +94,8 @@ async function withAudio(
   try {
     if (ctx.state === "suspended") {
       await ctx.resume();
+      // Still suspended = browser blocked us — no silent fail.
+      if (ctx.state === "suspended") return false;
     }
     unlocked = true;
     play(ctx, ctx.currentTime + 0.02);

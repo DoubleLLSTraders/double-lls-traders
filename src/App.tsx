@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { ResizableSplit } from "./components/ResizableSplit";
 import { AnalyzerPopup } from "./components/AnalyzerPopup";
 import { BotPanel, type BotSettings } from "./components/BotPanel";
@@ -30,6 +37,13 @@ import {
 } from "./lib/analysis/signal";
 import { findBestMarket } from "./lib/analysis/bestMarket";
 import {
+  advanceAnalyzerDirector,
+  DEAD_MARKET_MS,
+  isPromisingSetup,
+  type AnalyzerDirective,
+  type AnalyzerHold,
+} from "./lib/analysis/analyzerDirector";
+import {
   applyDiffersFastProfile,
   createDiffersFastBotSettings,
   DIFFERS_FAST_SYMBOL,
@@ -43,12 +57,7 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { storageKey } from "./lib/platform";
-import {
-  playAlmostSetupSound,
-  playGoodSetupSound,
-  unlockAudio,
-} from "./lib/sound";
-import { readMarketPulse } from "./lib/analysis/marketPulse";
+import { unlockAudio } from "./lib/sound";
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
@@ -71,7 +80,7 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
 const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
 /** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
-const BOT_SETTINGS_VERSION = 32;
+const BOT_SETTINGS_VERSION = 36;
 
 /** Volatility carousel — skip cheap-payout indices. */
 const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(
@@ -353,6 +362,67 @@ export default function App() {
     return bot.side === "DIGITMATCH" ? matchSignal : diffSignal;
   }, [bot.autoSide, bot.side, bot.sidePreference, matchSignal, diffSignal]);
 
+  // Analyzer director — advanced during render so Digits + desk share one tick.
+  const analyzerHoldRef = useRef<AnalyzerHold | null>(null);
+  const analyzerEpochRef = useRef<number | null>(null);
+  const [analyzerDirective, setAnalyzerDirective] =
+    useState<AnalyzerDirective | null>(null);
+  const analyzerBuyNowRef = useRef(false);
+  const latestTick = feed.ticks[feed.ticks.length - 1] ?? null;
+  const deskGate = {
+    minColdGap: bot.minColdGap,
+    minSample: bot.minSample,
+    maxMomentumGap: bot.maxMomentumGap,
+    side: bot.side,
+  };
+
+  if (
+    latestTick &&
+    analyzerEpochRef.current !== latestTick.epoch
+  ) {
+    analyzerEpochRef.current = latestTick.epoch;
+    const next = advanceAnalyzerDirector(
+      analyzerHoldRef.current,
+      symbol,
+      signal,
+      deskGate,
+    );
+    analyzerHoldRef.current = next.hold;
+    analyzerBuyNowRef.current = next.buyNow;
+    setAnalyzerDirective(next);
+  }
+
+  // Keep prediction glued after director settles (avoid setState loops in render).
+  useEffect(() => {
+    if (!analyzerDirective) return;
+    setBot((current) => {
+      if (
+        current.prediction === analyzerDirective.digit &&
+        current.autoFollow &&
+        (!current.autoSide || current.side === analyzerDirective.side)
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        prediction: analyzerDirective.digit,
+        autoFollow: true,
+        side: current.autoSide ? analyzerDirective.side : current.side,
+      };
+    });
+  }, [
+    analyzerDirective?.digit,
+    analyzerDirective?.side,
+    analyzerDirective?.buyNow,
+  ]);
+
+  useEffect(() => {
+    analyzerHoldRef.current = null;
+    analyzerEpochRef.current = null;
+    analyzerBuyNowRef.current = false;
+    setAnalyzerDirective(null);
+  }, [symbol]);
+
   // Keep Mode cards + prediction locked to the live market pick when auto-side is on.
   useEffect(() => {
     if (!bot.autoSide) return;
@@ -487,26 +557,41 @@ export default function App() {
     running: bot.running,
   };
 
+  const deadSinceRef = useRef<number | null>(null);
+
   /**
-   * Fast volatility carousel — next index in ~1s (no 10-market scan that
-   * pinned the desk on V75 for half a minute).
+   * Next volatility only when the current tape is dead — never leave a building cold.
    */
   const hopNextVolatility = useCallback(
     async (reason: string) => {
       if (!feed.client || feed.state !== "ready") return;
       if (marketSwitchBusy.current) return;
+      if (analyzerBuyNowRef.current || (analyzerHoldRef.current?.count ?? 0) > 0) {
+        return;
+      }
+      if (
+        isPromisingSetup(signalRef.current, {
+          minColdGap: botGateRef.current.minColdGap,
+          minSample: botGateRef.current.minSample,
+          maxMomentumGap: botGateRef.current.maxMomentumGap,
+          side: botGateRef.current.side,
+        })
+      ) {
+        return;
+      }
       marketSwitchBusy.current = true;
-      switchHoldRef.current = true;
+      deadSinceRef.current = null;
       const next = nextVolatilitySymbol(symbolHopRef.current);
+      switchHoldRef.current = botGateRef.current.running;
       setTimerNote(`${reason} · ${volatilityTag(next)}`);
       setSymbol(next);
       try {
         const feedReady = await waitForSymbolFeed(
           next,
-          80,
+          200,
           () => feedSnapshotRef.current,
           () => botHaltRef.current,
-          8000,
+          12000,
         );
         if (botHaltRef.current) return;
         const live = signalRef.current;
@@ -517,13 +602,12 @@ export default function App() {
           prediction: live.digit,
           autoFollow: true,
         }));
-        const deskReady = isDeskTradeReady(live, gate);
         setTimerNote(
-          deskReady
-            ? `Good · ${volatilityTag(next)} · ${live.label}`
+          isPromisingSetup(live, gate)
+            ? `Stay · ${volatilityTag(next)} · ${live.label}`
             : feedReady
-              ? `Analyze · ${volatilityTag(next)} · ${live.label}`
-              : `Analyze · ${volatilityTag(next)} · feed catching up`,
+              ? `Rotate · ${volatilityTag(next)} · ${live.label}`
+              : `Rotate · ${volatilityTag(next)} · feed catching up`,
         );
       } finally {
         switchHoldRef.current = false;
@@ -610,6 +694,9 @@ export default function App() {
     balance: feed.balance,
     symbol,
     client: feed.client,
+    analyzerBuyNow: analyzerDirective?.buyNow ?? false,
+    analyzerDigit: analyzerDirective?.digit ?? signal.digit,
+    analyzerSide: analyzerDirective?.side ?? signal.side,
     onSettings: (next) => setBot((current) => ({ ...current, ...next })),
     onStop: (reason) => {
       botHaltRef.current = true;
@@ -634,11 +721,13 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // Hunt carousel: tick updates used to reset this timer every second so the
-  // hop never fired and V75 looked "stuck". Interval is stable; Good is read
-  // from refs inside the tick.
+  // Hunt: stay on promising Building/Almost/Good; hop only after a dead dwell.
   const paperBusyRef = useRef(false);
   paperBusyRef.current = !!(paper.session.open || paper.orderPending);
+
+  useEffect(() => {
+    deadSinceRef.current = null;
+  }, [symbol]);
 
   useEffect(() => {
     if (scanningMarket || arm.arming) return;
@@ -646,24 +735,35 @@ export default function App() {
     if (menu !== "market" && !bot.running) return;
 
     const id = window.setInterval(() => {
-      if (marketSwitchBusy.current || switchHoldRef.current) return;
+      if (marketSwitchBusy.current) return;
       if (paperBusyRef.current) return;
+      if (analyzerBuyNowRef.current || (analyzerHoldRef.current?.count ?? 0) > 0) {
+        deadSinceRef.current = null;
+        return;
+      }
       const gate = botGateRef.current;
-      const good = isDeskTradeReady(signalRef.current, gate);
-      // While executing: stay only when Digits is Good so the bot can buy.
-      // Otherwise keep cycling volatilities.
-      if (good) return;
+      const promising = isPromisingSetup(signalRef.current, {
+        minColdGap: gate.minColdGap,
+        minSample: gate.minSample,
+        maxMomentumGap: gate.maxMomentumGap,
+        side: gate.side,
+      });
+      if (promising) {
+        deadSinceRef.current = null;
+        return;
+      }
+      const now = Date.now();
+      if (deadSinceRef.current === null) {
+        deadSinceRef.current = now;
+        return;
+      }
+      if (now - deadSinceRef.current < DEAD_MARKET_MS) return;
       void hopNextVolatility(
         gate.running
           ? "Hunting · next volatility"
           : "Live analyze · next volatility",
       );
-    }, 2800);
-
-    // Kick immediately so Start doesn't wait a full interval on a dead tape.
-    if (bot.running && !isDeskTradeReady(signalRef.current, botGateRef.current)) {
-      void hopNextVolatility("Hunting · next volatility");
-    }
+    }, 1500);
 
     return () => window.clearInterval(id);
   }, [
@@ -676,50 +776,17 @@ export default function App() {
     menu,
   ]);
 
-  // Sound when Digits hits Almost or Good (once each per market).
-  const pulseSoundRef = useRef<"idle" | "almost" | "good">("idle");
-  const pulseSoundSymbolRef = useRef(symbol);
+  // Timer note when Digits locks Trade now (sound lives in DigitBars only).
+  const goodNoteRef = useRef("");
   useEffect(() => {
-    if (pulseSoundSymbolRef.current !== symbol) {
-      pulseSoundSymbolRef.current = symbol;
-      pulseSoundRef.current = "idle";
-    }
-    const pulse = readMarketPulse(tradeStats, signal.side === "DIGITDIFF" ? signal : diffSignal, {
-      minColdGap: bot.minColdGap,
-      minSample: bot.minSample,
-      maxMomentumGap: bot.maxMomentumGap,
-      side: bot.side,
-      volatilityLabel: volatilityTag(symbol),
-    });
-    if (pulse.mood === "good" && pulseSoundRef.current !== "good") {
-      playGoodSetupSound();
-      setTimerNote(
-        `Good to trade · ${volatilityTag(symbol)} · ${signal.label} · gap ${signal.watching.signalGap ?? "—"}`,
-      );
-      pulseSoundRef.current = "good";
-      return;
-    }
-    if (
-      pulse.label === "Almost" &&
-      pulseSoundRef.current === "idle"
-    ) {
-      playAlmostSetupSound();
-      pulseSoundRef.current = "almost";
-      return;
-    }
-    if (pulse.mood !== "good" && pulse.label !== "Almost") {
-      pulseSoundRef.current = "idle";
-    }
-  }, [
-    tradeStats,
-    signal,
-    diffSignal,
-    bot.minColdGap,
-    bot.minSample,
-    bot.maxMomentumGap,
-    bot.side,
-    symbol,
-  ]);
+    if (!analyzerDirective?.buyNow) return;
+    const key = `${symbol}|${analyzerDirective.digit}`;
+    if (goodNoteRef.current === key) return;
+    goodNoteRef.current = key;
+    setTimerNote(
+      `Good to trade · ${volatilityTag(symbol)} · ${analyzerDirective.detail}`,
+    );
+  }, [analyzerDirective?.buyNow, analyzerDirective?.digit, analyzerDirective?.detail, symbol]);
 
   const displayBalance =
     feed.balance === null
@@ -801,9 +868,8 @@ export default function App() {
       return;
     }
 
-    // Browser only allows audio after a click — unlock + test beep on Start.
+    // Browser only allows audio after a click — unlock on Start / Open bot.
     unlockAudio();
-    playGoodSetupSound();
     botHaltRef.current = false;
 
     const botForStart =
@@ -1324,6 +1390,8 @@ export default function App() {
                   stats={tradeStats}
                   latestDigit={latest?.digit ?? null}
                   signal={diffSignal}
+                  director={analyzerDirective}
+                  symbol={symbol}
                   requirements={{
                     minColdGap: bot.minColdGap,
                     minSample: bot.minSample,

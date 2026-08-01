@@ -11,13 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v9) — practical pace.
+ * Differs desk profile (v13) — Digits Trade now = instant desk buy.
  *
- * v8 (gap≥14, n≥1500, full confirm/armed) waited ~25min for ~8 arms and the
- * Digits strip almost never showed Good. Desk bar: cold gap ≥6, sample ≥500,
- * EV + timing + #1 cold — fires in minutes so Start and Digits stay useful.
+ * Executor is a pure follower (no re-back / deep research). Stay while
+ * building; hop only after a dead dwell.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 9;
+export const DIFFERS_FAST_PROFILE_VERSION = 13;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {

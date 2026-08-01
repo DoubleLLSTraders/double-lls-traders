@@ -11,10 +11,10 @@ type DeskSettings = Pick<
 >;
 
 /**
- * Single source of truth for Digits “Good / Trade now” and bot buys.
+ * Digits Good / Trade now and bot buy — same gate.
  *
- * Desk Differs Good = #1 cold + gap + EV under 9.5%. Thin count-lead used to
- * leave gap-12 setups on “Almost” forever while the bot sat on one index.
+ * Practical Differs Good: #1 cold + gap + EV + clear lead. Multi-window agree
+ * is a bonus (shown as Almost/firming) — requiring it made Good almost never.
  */
 export function analyzerAllowsEntry(
   signal: MarketSignal,
@@ -70,7 +70,12 @@ export function analyzerAllowsEntry(
         reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.5%`,
       };
     }
-    // Lead/margin soft — strong absence (gap) + EV + #1 cold is enough to trade.
+    if (!signal.separationOk || !signal.coldMarginOk) {
+      return {
+        ok: false,
+        reason: `Analyzer · cold lead thin (${signal.watching.separation || "—"})`,
+      };
+    }
   }
 
   const sideLabel = signal.side === "DIGITMATCH" ? "Matches" : "Differs";
@@ -80,7 +85,6 @@ export function analyzerAllowsEntry(
   };
 }
 
-/** Digits mood “good” and Start live-good use the same check. */
 export function isAnalyzerGood(
   signal: MarketSignal,
   settings: DeskSettings,
@@ -88,10 +92,6 @@ export function isAnalyzerGood(
   return analyzerAllowsEntry(signal, settings).ok;
 }
 
-/**
- * Recompute cold/hot gap from the live tick tape so a stale signal cannot buy
- * after the barrier just printed (Digits already shows Warming).
- */
 export function liveDigitGap(
   digits: readonly number[],
   digit: number,
@@ -112,16 +112,23 @@ export function liveTapeAllowsEntry(
   const base = analyzerAllowsEntry(signal, settings);
   if (!base.ok) return base;
 
+  const window = Math.max(
+    settings.minSample,
+    signal.watching.sampleSize,
+    1,
+  );
+  const tape = recentDigits.slice(-window);
+
   if (signal.side === "DIGITDIFF") {
-    const gap = liveDigitGap(recentDigits, signal.digit);
-    if (gap < settings.minColdGap) {
+    const gap = liveDigitGap(tape, signal.digit);
+    if (gap === 0 || gap < Math.max(2, Math.floor(settings.minColdGap / 2))) {
       return {
         ok: false,
         reason: `Analyzer · live gap ${gap}/${settings.minColdGap} · Warming (tape)`,
       };
     }
   } else {
-    const gap = liveDigitGap(recentDigits, signal.digit);
+    const gap = liveDigitGap(tape, signal.digit);
     if (gap > settings.maxMomentumGap) {
       return {
         ok: false,

@@ -25,7 +25,7 @@ export interface MarketPulse {
 
 export function formatPulseNeed(req: PulseRequirements): string {
   const vol = req.volatilityLabel ? ` · ${req.volatilityLabel}` : "";
-  return `Good needs gap≥${req.minColdGap} · n≥${req.minSample}${vol}`;
+  return `Good needs gap≥${req.minColdGap} · n≥${req.minSample} · lead · Trade now = buy${vol}`;
 }
 
 /**
@@ -96,6 +96,27 @@ export function readMarketPulse(
       "good",
       isArmedSignal(differs) ? "Trade now" : "Good market",
       `Differs ${differs.digit} · gap ${signalGap ?? "—"}/${minGap} · ${differs.digitPercent.toFixed(1)}% · power ${differs.power}`,
+    );
+  }
+
+  // Gap/EV there but firm filters (windows + cold lead) still open.
+  if (
+    differs &&
+    differs.evOk &&
+    differs.timingOk &&
+    differs.barrierAligned &&
+    differs.primaryBarrier &&
+    (signalGap ?? 0) >= minGap &&
+    differs.digitPercent <= 9.5 &&
+    (!differs.windowsAgree || !differs.separationOk || !differs.coldMarginOk)
+  ) {
+    const firming = !differs.windowsAgree
+      ? `windows ${differs.watching.windowVotes || "—"}`
+      : `lead ${differs.watching.separation || "—"}`;
+    return withNeed(
+      "watch",
+      "Almost",
+      `Differs ${differs.digit} · firming · ${firming}`,
     );
   }
 

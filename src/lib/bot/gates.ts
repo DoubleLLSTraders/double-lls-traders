@@ -219,12 +219,8 @@ export function evaluateEntry(
           reason: `Skip · Differs ${signal.digit} hit last loss · wait for new cold pick`,
         };
       }
-      if (!signal.separationOk || !signal.coldMarginOk) {
-        return {
-          ok: false,
-          reason: `Skip · cold barrier unclear (${signal.watching.separation || "—"})`,
-        };
-      }
+      // Lead / margin / windows live in analyzerAllowsEntry — Digits Good
+      // already proved them; do not re-block and desync the desk.
     }
     if (settings.requireMultiWindow && !signal.windowsAgree) {
       return {
