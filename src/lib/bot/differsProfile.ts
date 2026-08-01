@@ -105,7 +105,10 @@ export function applyDiffersFastProfile(current: BotSettings): BotSettings {
     ...DIFFERS_FAST_MODE,
     ...DIFFERS_FAST_GATES,
     maxConsecutiveLosses: DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES,
-    maxRuns: 1,
+    // Keep the Bot form's Number of runs / money limits — do not reset to 1.
+    maxRuns: Math.max(1, current.maxRuns || 1),
+    takeProfit: current.takeProfit,
+    stopLoss: current.stopLoss,
     maxStake: Math.max(current.maxStake, current.stake),
     running: false,
   };

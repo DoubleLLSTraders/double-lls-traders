@@ -8,7 +8,7 @@ import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
 import { liveTapeAllowsEntry } from "../lib/analysis/analyzerGate";
 import { capStake, evaluateEntry, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
-import { analyzeNextPredictionDeep, MAX_WINS_BEFORE_BANK } from "../lib/bot/deepNext";
+import { analyzeNextPredictionDeep } from "../lib/bot/deepNext";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
 import { playLossSound, playWinSound } from "../lib/sound";
@@ -17,7 +17,6 @@ import {
   MATCH_PAYOUT_MULTIPLIER,
   computePerformance,
   profitRate,
-  rollingExpectancy,
   settleContractPnl,
   type PerformanceStats,
 } from "../lib/bot/performance";
@@ -556,97 +555,18 @@ export function usePaperBot(options: {
         return;
       }
 
-      // Hard bank after MAX_WINS_BEFORE_BANK wins this Start.
-      if (runsDone >= MAX_WINS_BEFORE_BANK) {
+      // Bot form owns the flow: Number of runs → Take profit / Stop loss.
+      if (nextSettings.maxRuns > 0 && runsDone >= nextSettings.maxRuns) {
         onStopRef.current(
-          `Stopped · banked ${runsDone} wins · will not press further.`,
+          `Stopped · ${runsDone}/${nextSettings.maxRuns} runs complete.`,
         );
         setLog((lines) =>
           pushLog(
             lines,
-            `STOPPED · banked ${runsDone} wins · take-profit/runs ignored`,
+            `STOPPED · ${runsDone}/${nextSettings.maxRuns} runs complete · P/L ${
+              runPnl >= 0 ? "+" : ""
+            }${runPnl.toFixed(2)} ${currency}`,
           ),
-        );
-        return;
-      }
-
-      // Deep research on the *next* prediction before it can run. Same cold
-      // digit after a Differs win is refused (correlated bet). Anything short
-      // of a fully armed *new* setup → get out immediately.
-      const lastPrinted =
-        nextSession.lastEntryDigit === null || nextSession.lastEntryEpoch === null
-          ? true
-          : ticks.some(
-              (tick) =>
-                tick.epoch > nextSession.lastEntryEpoch! &&
-                tick.digit === nextSession.lastEntryDigit,
-            );
-      const deep = analyzeNextPredictionDeep({
-        signal: liveSignal,
-        settings: nextSettings,
-        symbol,
-        lastEntryDigit: open.digit,
-        lastEntryDigitPrinted: lastPrinted,
-        winsThisStart: nextSession.wins,
-        coolBarrierDigit: nextSession.coolBarrierDigit,
-      });
-      if (!deep.ok) {
-        onStopRef.current(deep.reason);
-        setLog((lines) =>
-          pushLog(
-            lines,
-            `STOPPED · ${deep.reason} · banked after ${runsDone} win(s)`,
-          ),
-        );
-        return;
-      }
-
-      setLog((lines) =>
-        pushLog(lines, `NEXT · ${deep.summary} · allowing trade ${runsDone + 1}`),
-      );
-
-      const perf = computePerformance({
-        ...nextSession,
-        payoutMultiplier:
-          open.side === "DIGITMATCH" ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER,
-      });
-      // 0 means the pause is off — do not treat "after 0 trades" as always-on.
-      if (
-        nextSettings.pauseIfBelowBreakEvenAfter > 0 &&
-        nextSession.trades >= nextSettings.pauseIfBelowBreakEvenAfter &&
-        perf.winRate + 0.05 < perf.breakEvenWinRate
-      ) {
-        setLog((lines) =>
-          pushLog(
-            lines,
-            `STOPPED · Win ${perf.winRate.toFixed(1)}% < break-even ${perf.breakEvenWinRate.toFixed(1)}%`,
-          ),
-        );
-        onStopRef.current("Win rate below break-even for this contract.");
-        return;
-      }
-
-      const rollN = nextSettings.pauseIfExpectancyNegativeAfter;
-      const rollExp = rollingExpectancy(nextSession.journal, rollN);
-      if (rollN > 0 && rollExp !== null && rollExp < 0) {
-        setLog((lines) =>
-          pushLog(
-            lines,
-            `STOPPED · rolling expectancy ${rollExp.toFixed(2)} over last ${rollN} trades`,
-          ),
-        );
-        onStopRef.current("Rolling expectancy negative.");
-        return;
-      }
-
-      const ddPct = drawdownPercent(nextSession, liveBalance);
-      if (
-        nextSettings.maxDrawdownPercent > 0 &&
-        ddPct >= nextSettings.maxDrawdownPercent
-      ) {
-        onStopRef.current("Max drawdown %.");
-        setLog((lines) =>
-          pushLog(lines, `STOPPED · drawdown ${ddPct.toFixed(1)}% kill-switch`),
         );
         return;
       }
@@ -670,25 +590,11 @@ export function usePaperBot(options: {
         );
         return;
       }
-      if (nextSettings.maxRuns > 0 && runsDone >= nextSettings.maxRuns) {
-        onStopRef.current("Run count reached.");
-        setLog((lines) =>
-          pushLog(
-            lines,
-            `STOPPED · ${runsDone}/${nextSettings.maxRuns} runs complete · P/L ${
-              runPnl >= 0 ? "+" : ""
-            }${runPnl.toFixed(2)} ${currency}`,
-          ),
-        );
-        return;
-      }
       if (pnl <= -nextSettings.dailyLossLimit) {
         onStopRef.current("Daily loss cap.");
         setLog((lines) => pushLog(lines, "STOPPED · daily loss cap"));
         return;
       }
-      // When Take profit is set, it owns the profit stop for this Start.
-      // The daily target only applies when Take profit is left at 0.
       if (
         nextSettings.takeProfit <= 0 &&
         pnl >= nextSettings.dailyProfitTarget
@@ -697,19 +603,24 @@ export function usePaperBot(options: {
         setLog((lines) => pushLog(lines, "STOPPED · profit target"));
         return;
       }
-      if (consecutiveLosses >= nextSettings.maxConsecutiveLosses) {
-        onStopRef.current("Max consecutive losses.");
-        setLog((lines) => pushLog(lines, "STOPPED · max consecutive losses"));
-        return;
-      }
       if (nextSession.trades >= nextSettings.maxTradesPerDay) {
         onStopRef.current("Max trades / day.");
         setLog((lines) => pushLog(lines, "STOPPED · max trades / day"));
         return;
       }
 
-      // Never open the next trade on the same tick that just settled — wait for
-      // a fresh tick so Stop can land before another buy fires.
+      // More runs left — keep hunting Digits Good (form Number of runs).
+      const runsLeft =
+        nextSettings.maxRuns > 0
+          ? `${runsDone}/${nextSettings.maxRuns}`
+          : `${runsDone}`;
+      setWaitReason(`Run ${runsLeft} won · hunting next Good…`);
+      setLog((lines) =>
+        pushLog(
+          lines,
+          `NEXT · run ${runsLeft} done · continuing for remaining runs`,
+        ),
+      );
       sessionRef.current = nextSession;
       return;
     }
@@ -788,13 +699,10 @@ export function usePaperBot(options: {
           firstEntry: runsDoneNow < 1,
         });
         if (!deep.ok) {
-          if (runsDoneNow >= 1) {
+          if (deep.stop) {
             onStopRef.current(deep.reason);
             setLog((lines) =>
-              pushLog(
-                lines,
-                `STOPPED · ${deep.reason} · after ${runsDoneNow} trade(s)`,
-              ),
+              pushLog(lines, `STOPPED · ${deep.reason}`),
             );
             return;
           }
@@ -805,7 +713,6 @@ export function usePaperBot(options: {
             setLog((lines) => pushLog(lines, deep.reason));
           }
           stuckSkipsRef.current += 1;
-          // Bad / Almost tape — hop volatility quickly (don't sit on one index).
           if (stuckSkipsRef.current >= 3) {
             stuckSkipsRef.current = 0;
             if (onSwitchMarketRef.current) {
@@ -814,11 +721,6 @@ export function usePaperBot(options: {
                 pushLog(lines, "ROTATE · bad market · next volatility"),
               );
               onSwitchMarketRef.current("Bad market · next volatility");
-            } else {
-              onStopRef.current("Deep · first setup never armed · stopped");
-              setLog((lines) =>
-                pushLog(lines, "STOPPED · first setup never armed · get out"),
-              );
             }
           }
           return;
@@ -843,14 +745,6 @@ export function usePaperBot(options: {
         setWaitReason(gate.reason);
         if (nextSession.skipped % 5 === 1) {
           setLog((lines) => pushLog(lines, gate.reason));
-        }
-
-        if (runsDoneNow >= 1) {
-          onStopRef.current(gate.reason.replace(/^Skip ·/, "Deep · "));
-          setLog((lines) =>
-            pushLog(lines, `STOPPED · ${gate.reason} · get out`),
-          );
-          return;
         }
 
         // Analyzer / Almost / Building holds must rotate — including "Skip · gap"
@@ -899,7 +793,7 @@ export function usePaperBot(options: {
           firstEntry: runsDoneNow < 1,
         });
         if (!fireDeep.ok) {
-          if (runsDoneNow >= 1) {
+          if (fireDeep.stop) {
             onStopRef.current(fireDeep.reason);
             setLog((lines) =>
               pushLog(lines, `STOPPED · faded at fire · ${fireDeep.reason}`),

@@ -592,11 +592,12 @@ export function BotPanel({
             <small>
               {settings.maxRuns > 0 && settings.takeProfit > 0 ? (
                 <>
-                  Auto · ~{settings.maxRuns} wins to hit TP (+{settings.takeProfit.toFixed(2)}{" "}
-                  {currency}) · {runsThisStart} this Start
+                  Flow · {settings.maxRuns} runs this Start (then TP +
+                  {settings.takeProfit.toFixed(2)} {currency}) · now{" "}
+                  {runsThisStart}/{settings.maxRuns}
                 </>
               ) : settings.maxRuns > 0 ? (
-                `${runsThisStart} / ${settings.maxRuns} this Start`
+                `Flow · ${runsThisStart}/${settings.maxRuns} runs this Start`
               ) : (
                 `0 = off · ${runsThisStart} this Start`
               )}
@@ -661,8 +662,8 @@ export function BotPanel({
                 <>Live mode · apply recommended settings before Start</>
               ) : differsFastActive ? (
                 <>
-                  <strong>Differs</strong> · deep-check next prediction · same
-                  digit after a win = stop · max 2 wins / Start
+                  <strong>Differs</strong> · Digits Good each entry · Number of
+                  runs owns this Start ({settings.maxRuns || "∞"})
                 </>
               ) : (
                 <>Custom bot settings · not on the Differs profile</>
