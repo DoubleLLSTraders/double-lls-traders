@@ -92,7 +92,11 @@ export function DigitBars({
         detail: entry,
       };
     }
-    if (director.label === "Locking" || director.label === "Almost") {
+    if (
+      director.label === "Locking" ||
+      director.label === "Confirming" ||
+      director.label === "Almost"
+    ) {
       return {
         ...basePulse,
         mood: "watch" as const,
@@ -119,7 +123,11 @@ export function DigitBars({
       pulse.label === "Trade now" ||
       (director?.buyNow === true && pulse.mood === "good");
     if (!tradeNow) {
-      if (pulse.label !== "Locking" && pulse.mood !== "good") {
+      if (
+        pulse.label !== "Locking" &&
+        pulse.label !== "Confirming" &&
+        pulse.mood !== "good"
+      ) {
         alertKeyRef.current = "";
       }
       return;

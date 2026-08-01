@@ -40,6 +40,8 @@ import {
   advanceAnalyzerDirector,
   DEAD_MARKET_MS,
   isPromisingSetup,
+  MAX_MARKET_DWELL_MS,
+  shouldHoldMarket,
   type AnalyzerDirective,
   type AnalyzerHold,
 } from "./lib/analysis/analyzerDirector";
@@ -80,7 +82,7 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
 const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
 /** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
-const BOT_SETTINGS_VERSION = 37;
+const BOT_SETTINGS_VERSION = 39;
 
 /** Volatility carousel — skip cheap-payout indices. */
 const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(
@@ -391,13 +393,13 @@ export default function App() {
     );
     analyzerHoldRef.current = next.hold;
     analyzerBuyNowRef.current = next.buyNow;
-    // Park on this market while Trade now is live — no hop mid-entry.
+    // Park only while Confirming / Trade now — Locking alone must not freeze hunt.
     if (next.buyNow) {
       tradeNowStayUntilRef.current = Date.now() + 8000;
-    } else if (next.hold && next.hold.count > 0) {
+    } else if (next.hold?.phase === "confirm") {
       tradeNowStayUntilRef.current = Math.max(
         tradeNowStayUntilRef.current,
-        Date.now() + 2000,
+        Date.now() + 5000,
       );
     }
     setAnalyzerDirective(next);
@@ -569,31 +571,37 @@ export default function App() {
   };
 
   const deadSinceRef = useRef<number | null>(null);
+  const marketArriveRef = useRef(Date.now());
 
   /**
-   * Next volatility only when the current tape is dead — never leave a building cold.
+   * Hunt next volatility for a steadier tape.
+   * force=true leaves soft Almost / stalled Locking; never cuts Confirming / Trade now.
    */
   const hopNextVolatility = useCallback(
-    async (reason: string) => {
+    async (reason: string, force = false) => {
       if (!feed.client || feed.state !== "ready") return;
       if (marketSwitchBusy.current) return;
-      if (analyzerBuyNowRef.current || (analyzerHoldRef.current?.count ?? 0) > 0) {
-        return;
+      const now = Date.now();
+      const hold = analyzerHoldRef.current;
+      const buyNow = analyzerBuyNowRef.current === true;
+      if (buyNow || hold?.phase === "confirm") return;
+      if (!force) {
+        if (shouldHoldMarket(hold, buyNow, now)) return;
+        if (now < tradeNowStayUntilRef.current) return;
+        if (
+          isPromisingSetup(signalRef.current, {
+            minColdGap: botGateRef.current.minColdGap,
+            minSample: botGateRef.current.minSample,
+            maxMomentumGap: botGateRef.current.maxMomentumGap,
+            side: botGateRef.current.side,
+          })
+        ) {
+          return;
+        }
       }
-      // Do not abandon a market that just locked / showed Trade now.
-      if (Date.now() < tradeNowStayUntilRef.current) {
-        return;
-      }
-      if (
-        isPromisingSetup(signalRef.current, {
-          minColdGap: botGateRef.current.minColdGap,
-          minSample: botGateRef.current.minSample,
-          maxMomentumGap: botGateRef.current.maxMomentumGap,
-          side: botGateRef.current.side,
-        })
-      ) {
-        return;
-      }
+      // Drop stalled lock so the next market starts clean.
+      analyzerHoldRef.current = null;
+      analyzerBuyNowRef.current = false;
       marketSwitchBusy.current = true;
       deadSinceRef.current = null;
       const next = nextVolatilitySymbol(symbolHopRef.current);
@@ -603,10 +611,10 @@ export default function App() {
       try {
         const feedReady = await waitForSymbolFeed(
           next,
-          200,
+          40,
           () => feedSnapshotRef.current,
           () => botHaltRef.current,
-          12000,
+          5000,
         );
         if (botHaltRef.current) return;
         const live = signalRef.current;
@@ -621,8 +629,8 @@ export default function App() {
           isPromisingSetup(live, gate)
             ? `Stay · ${volatilityTag(next)} · ${live.label}`
             : feedReady
-              ? `Rotate · ${volatilityTag(next)} · ${live.label}`
-              : `Rotate · ${volatilityTag(next)} · feed catching up`,
+              ? `Hunt · ${volatilityTag(next)} · ${live.label}`
+              : `Hunt · ${volatilityTag(next)} · feed catching up`,
         );
       } finally {
         switchHoldRef.current = false;
@@ -634,7 +642,7 @@ export default function App() {
 
   const switchToAnalyzedMarket = useCallback(
     async (reason: string) => {
-      await hopNextVolatility(reason);
+      await hopNextVolatility(reason, true);
     },
     [hopNextVolatility],
   );
@@ -736,12 +744,15 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // Hunt: stay on promising Building/Almost/Good; hop only after a dead dwell.
+  // Hunt actively: stay only for Confirming / Trade now / one clean Lock.
   const paperBusyRef = useRef(false);
   paperBusyRef.current = !!(paper.session.open || paper.orderPending);
 
   useEffect(() => {
     deadSinceRef.current = null;
+    marketArriveRef.current = Date.now();
+    analyzerHoldRef.current = null;
+    analyzerBuyNowRef.current = false;
   }, [symbol]);
 
   useEffect(() => {
@@ -752,26 +763,48 @@ export default function App() {
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current) return;
       if (paperBusyRef.current) return;
-      if (
-        analyzerBuyNowRef.current ||
-        (analyzerHoldRef.current?.count ?? 0) > 0 ||
-        Date.now() < tradeNowStayUntilRef.current
-      ) {
+      const now = Date.now();
+      const hold = analyzerHoldRef.current;
+      const buyNow = analyzerBuyNowRef.current === true;
+
+      // Never cut a proving entry.
+      if (buyNow || hold?.phase === "confirm") {
         deadSinceRef.current = null;
         return;
       }
+      if (shouldHoldMarket(hold, buyNow, now)) {
+        deadSinceRef.current = null;
+        return;
+      }
+      if (now < tradeNowStayUntilRef.current) {
+        deadSinceRef.current = null;
+        return;
+      }
+
       const gate = botGateRef.current;
+      const marketAge = now - marketArriveRef.current;
       const promising = isPromisingSetup(signalRef.current, {
         minColdGap: gate.minColdGap,
         minSample: gate.minSample,
         maxMomentumGap: gate.maxMomentumGap,
         side: gate.side,
       });
+
+      // Soft Almost / stalled Lock — keep searching other volatilities.
+      if (marketAge >= MAX_MARKET_DWELL_MS) {
+        void hopNextVolatility(
+          gate.running
+            ? "Hunting · search next steady"
+            : "Analyze · search next steady",
+          true,
+        );
+        return;
+      }
+
       if (promising) {
         deadSinceRef.current = null;
         return;
       }
-      const now = Date.now();
       if (deadSinceRef.current === null) {
         deadSinceRef.current = now;
         return;
@@ -781,8 +814,9 @@ export default function App() {
         gate.running
           ? "Hunting · next volatility"
           : "Live analyze · next volatility",
+        true,
       );
-    }, 1500);
+    }, 1000);
 
     return () => window.clearInterval(id);
   }, [

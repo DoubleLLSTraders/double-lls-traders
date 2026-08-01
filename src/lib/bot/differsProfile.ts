@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v14) — Trade now only after a steady lock.
+ * Differs desk profile (v15) — Lock → Confirm → Trade now.
  *
- * Fleeting Good flashes stay Locking (~5 ticks / 4.5s). Executor follows
- * only armed Trade now and re-checks at fire time.
+ * Fake few-second flashes never reach Trade now. Needs ~10s lock + ~4s
+ * confirm with non-shrinking gap before the desk may buy.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 14;
+export const DIFFERS_FAST_PROFILE_VERSION = 15;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {

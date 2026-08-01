@@ -1,9 +1,9 @@
 /**
  * Analyzer director — Digits decides; the trade desk only follows.
  *
- * Trade now is only armed after the same market+digit stays Good for
- * STEADY_TICKS and STEADY_MS. Fleeting 1–2s flashes stay on Locking and
- * must never reach the executor.
+ * Fake flashes that last only a few seconds must never become Trade now.
+ * Flow: Locking (same digit stays Good) → Confirming (still Good, gap
+ * never shrinks) → Trade now (desk may buy). Any fade restarts from zero.
  */
 import {
   analyzerAllowsEntry,
@@ -12,14 +12,27 @@ import {
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
 
-/** Continuous Good ticks on the same digit before Trade now. */
-export const STEADY_TICKS = 5;
+/** Phase 1 — build a real cold hold (~7s on 1s indices). */
+export const LOCK_TICKS = 6;
+export const LOCK_MS = 7_000;
 
-/** Wall-clock hold so a burst of ticks cannot fake a lock. */
-export const STEADY_MS = 4500;
+/** Phase 2 — prove it is not fading before Trade now (~3s more). */
+export const CONFIRM_TICKS = 3;
+export const CONFIRM_MS = 3_000;
 
-/** How long a dead tape must sit before we rotate volatility. */
-export const DEAD_MARKET_MS = 9000;
+/** @deprecated use LOCK_TICKS — kept for UI copy helpers */
+export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
+/** @deprecated use LOCK_MS + CONFIRM_MS */
+export const STEADY_MS = LOCK_MS + CONFIRM_MS;
+
+/** Dead tape — hop quickly and keep searching. */
+export const DEAD_MARKET_MS = 4_000;
+
+/**
+ * Max time on one volatility without Confirming / Trade now.
+ * Soft “almost” setups must not park the carousel.
+ */
+export const MAX_MARKET_DWELL_MS = 14_000;
 
 type DeskSettings = Pick<
   BotSettings,
@@ -28,11 +41,16 @@ type DeskSettings = Pick<
 
 export interface AnalyzerHold {
   key: string;
+  /** Ticks in the current phase. */
   count: number;
   lastGap: number;
   digit: number;
   side: MarketSignal["side"];
+  /** When the current phase started. */
   sinceMs: number;
+  phase: "lock" | "confirm";
+  /** When the overall lock started (for display). */
+  lockSinceMs: number;
 }
 
 export interface AnalyzerDirective {
@@ -49,8 +67,13 @@ function holdKey(symbol: string, signal: MarketSignal): string {
   return `${symbol}|${signal.side}|${signal.digit}`;
 }
 
+function firmGapFloor(settings: DeskSettings, side: MarketSignal["side"]): number {
+  return side === "DIGITDIFF" ? settings.minColdGap + 2 : settings.minColdGap;
+}
+
 /**
- * True while Digits should stay put — building / almost / locking / Trade now.
+ * True only for a near-ready cold worth a short stay.
+ * Warming / weak gaps return false so the carousel keeps hunting.
  */
 export function isPromisingSetup(
   signal: MarketSignal,
@@ -61,13 +84,60 @@ export function isPromisingSetup(
 
   const gap = signal.watching.signalGap ?? 0;
   const n = signal.watching.sampleSize;
-  if (n < 80) return true;
-  if (n < Math.min(300, settings.minSample) && gap >= 2) return true;
+  // Warming feed — do not park; keep searching other volatilities.
+  if (n < 200) return false;
   if (!signal.primaryBarrier || !signal.barrierAligned) return false;
-  if (signal.digitPercent > 9.5) return false;
-  if (gap >= 3 && signal.digitPercent <= 9.5) return true;
-  if (signal.evOk && gap >= Math.max(2, settings.minColdGap - 3)) return true;
+  if (signal.digitPercent > 9.2) return false;
+  // Near Good: gap almost at floor with firm cold.
+  if (gap >= settings.minColdGap - 1 && signal.digitPercent <= 9.1) return true;
+  if (gap >= 5 && signal.digitPercent <= 9.0 && n >= Math.min(400, settings.minSample)) {
+    return true;
+  }
   return false;
+}
+
+/** Stay glued only while proving a real entry (Confirm / Trade now / clean Lock). */
+export function shouldHoldMarket(
+  hold: AnalyzerHold | null,
+  buyNow: boolean,
+  nowMs: number = Date.now(),
+): boolean {
+  if (buyNow) return true;
+  if (!hold) return false;
+  if (hold.phase === "confirm") return true;
+  // One clean lock attempt — if it keeps restarting, hunting resumes.
+  return nowMs - hold.lockSinceMs < LOCK_MS + 1_500;
+}
+
+function restartLock(
+  key: string,
+  digit: number,
+  side: MarketSignal["side"],
+  gap: number,
+  nowMs: number,
+  sideLabel: string,
+  gate: AnalyzerGateResult,
+  why: string,
+): AnalyzerDirective {
+  const hold: AnalyzerHold = {
+    key,
+    count: 1,
+    lastGap: gap,
+    digit,
+    side,
+    sinceMs: nowMs,
+    phase: "lock",
+    lockSinceMs: nowMs,
+  };
+  return {
+    gate,
+    buyNow: false,
+    hold,
+    label: "Locking",
+    detail: `${sideLabel} ${digit} · ${why} · restart 1/${LOCK_TICKS} · gap ${gap}`,
+    digit,
+    side,
+  };
 }
 
 export function advanceAnalyzerDirector(
@@ -81,6 +151,8 @@ export function advanceAnalyzerDirector(
   const digit = signal.digit;
   const side = signal.side;
   const sideLabel = side === "DIGITMATCH" ? "Matches" : "Differs";
+  const gap = signal.watching.signalGap ?? 0;
+  const firmGap = firmGapFloor(settings, side);
 
   if (!gate.ok) {
     return {
@@ -94,12 +166,6 @@ export function advanceAnalyzerDirector(
     };
   }
 
-  const key = holdKey(symbol, signal);
-  const gap = signal.watching.signalGap ?? 0;
-
-  // Need a little air under the gap so a print one tick later is less likely.
-  const firmGap =
-    side === "DIGITDIFF" ? settings.minColdGap + 1 : settings.minColdGap;
   if (side === "DIGITDIFF" && gap < firmGap) {
     return {
       gate: {
@@ -115,80 +181,126 @@ export function advanceAnalyzerDirector(
     };
   }
 
+  // Firmer cold while proving the entry — lukewarm colds fade fast.
+  if (side === "DIGITDIFF" && signal.digitPercent > 9.0) {
+    return {
+      gate: {
+        ok: false,
+        reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.0% · not firm`,
+      },
+      buyNow: false,
+      hold: null,
+      label: "Almost",
+      detail: `${sideLabel} ${digit} · cold ${signal.digitPercent.toFixed(1)}% · need ≤9.0% for steady`,
+      digit,
+      side,
+    };
+  }
+
+  const key = holdKey(symbol, signal);
+
   if (!prev || prev.key !== key) {
-    const hold: AnalyzerHold = {
+    return restartLock(
       key,
-      count: 1,
-      lastGap: gap,
       digit,
       side,
-      sinceMs: nowMs,
-    };
-    return {
+      gap,
+      nowMs,
+      sideLabel,
       gate,
-      buyNow: false,
-      hold,
-      label: "Locking",
-      detail: `${sideLabel} ${digit} · locking 1/${STEADY_TICKS} · ${Math.round(STEADY_MS / 1000)}s · gap ${gap}`,
-      digit,
-      side,
-    };
+      "new cold",
+    );
   }
 
-  // Gap collapsed while locking — fake entry; restart (do not buy).
-  if (side === "DIGITDIFF" && gap + 1 < prev.lastGap) {
-    const hold: AnalyzerHold = {
+  // Any gap shrink = fading flash — never buy that.
+  if (side === "DIGITDIFF" && gap < prev.lastGap) {
+    return restartLock(
       key,
-      count: 1,
-      lastGap: gap,
       digit,
       side,
-      sinceMs: nowMs,
-    };
-    return {
+      gap,
+      nowMs,
+      sideLabel,
       gate,
-      buyNow: false,
-      hold,
-      label: "Locking",
-      detail: `${sideLabel} ${digit} · gap dipped · restart 1/${STEADY_TICKS}`,
-      digit,
-      side,
-    };
+      "gap faded",
+    );
   }
 
-  const count = prev.count + 1;
   const heldMs = nowMs - prev.sinceMs;
-  const hold: AnalyzerHold = {
-    key,
-    count,
-    lastGap: Math.max(prev.lastGap, gap),
-    digit,
-    side,
-    sinceMs: prev.sinceMs,
-  };
-  const buyNow = count >= STEADY_TICKS && heldMs >= STEADY_MS;
+  const count = prev.count + 1;
 
-  if (!buyNow) {
-    const tickPart = Math.min(count, STEADY_TICKS);
-    const secPart = Math.min(STEADY_MS, heldMs);
+  // ── Phase 1: Locking ────────────────────────────────────────────────
+  if (prev.phase === "lock") {
+    const hold: AnalyzerHold = {
+      ...prev,
+      count,
+      lastGap: gap,
+      sinceMs: prev.sinceMs,
+      phase: "lock",
+    };
+    const locked = count >= LOCK_TICKS && heldMs >= LOCK_MS;
+    if (!locked) {
+      return {
+        gate,
+        buyNow: false,
+        hold,
+        label: "Locking",
+        detail: `${sideLabel} ${digit} · locking ${Math.min(count, LOCK_TICKS)}/${LOCK_TICKS} · ${Math.round(Math.min(heldMs, LOCK_MS) / 100) / 10}s/${Math.round(LOCK_MS / 1000)}s · gap ${gap}`,
+        digit,
+        side,
+      };
+    }
+    // Enter confirm — do not buy on this tick.
+    const confirmHold: AnalyzerHold = {
+      key,
+      count: 1,
+      lastGap: gap,
+      digit,
+      side,
+      sinceMs: nowMs,
+      phase: "confirm",
+      lockSinceMs: prev.lockSinceMs,
+    };
+    return {
+      gate,
+      buyNow: false,
+      hold: confirmHold,
+      label: "Confirming",
+      detail: `${sideLabel} ${digit} · confirming 1/${CONFIRM_TICKS} · proving steady · gap ${gap}`,
+      digit,
+      side,
+    };
+  }
+
+  // ── Phase 2: Confirming ─────────────────────────────────────────────
+  const hold: AnalyzerHold = {
+    ...prev,
+    count,
+    lastGap: gap,
+    sinceMs: prev.sinceMs,
+    phase: "confirm",
+  };
+  const confirmed = count >= CONFIRM_TICKS && heldMs >= CONFIRM_MS;
+  if (!confirmed) {
     return {
       gate,
       buyNow: false,
       hold,
-      label: "Locking",
-      detail: `${sideLabel} ${digit} · locking ${tickPart}/${STEADY_TICKS} · ${Math.round(secPart / 100) / 10}s/${Math.round(STEADY_MS / 1000)}s · gap ${gap}`,
+      label: "Confirming",
+      detail: `${sideLabel} ${digit} · confirming ${Math.min(count, CONFIRM_TICKS)}/${CONFIRM_TICKS} · ${Math.round(Math.min(heldMs, CONFIRM_MS) / 100) / 10}s/${Math.round(CONFIRM_MS / 1000)}s · gap ${gap}`,
       digit,
       side,
     };
   }
 
   const pct = signal.digitPercent.toFixed(1);
+  const totalSec = Math.round((nowMs - prev.lockSinceMs) / 1000);
   return {
     gate,
     buyNow: true,
     hold,
     label: "Trade now",
-    detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${settings.minColdGap} · cold ${pct}% · power ${signal.power} · held ${STEADY_TICKS} ticks`,
+    detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${settings.minColdGap} · cold ${pct}% · power ${signal.power} · steady ${totalSec}s`,
     digit,
     side,
   };

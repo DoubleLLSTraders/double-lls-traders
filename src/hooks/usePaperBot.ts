@@ -748,7 +748,7 @@ export function usePaperBot(options: {
         );
         if (!isAnalyzerGood(liveSignal, nextSettings)) {
           stuckSkipsRef.current += 1;
-          if (stuckSkipsRef.current >= 20 && onSwitchMarketRef.current) {
+          if (stuckSkipsRef.current >= 8 && onSwitchMarketRef.current) {
             stuckSkipsRef.current = 0;
             setWaitReason("Analyzer · tape dead · next market…");
             setLog((lines) =>
@@ -807,6 +807,30 @@ export function usePaperBot(options: {
         );
         setLog((lines) =>
           pushLog(lines, `SKIP · faded Trade now · ${stillGood.reason}`),
+        );
+        return;
+      }
+      // Reject soft / fading entries at the wire — need air under the gap.
+      const liveGap = liveSignal.watching.signalGap;
+      const needGap = nextSettings.minColdGap + 2;
+      if (
+        followSide === "DIGITDIFF" &&
+        (liveGap === null || liveGap < needGap)
+      ) {
+        setWaitReason(
+          `Follow · gap ${liveGap ?? "—"}/${needGap} · not steady enough`,
+        );
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `SKIP · fake/fading entry · gap ${liveGap ?? "—"} < ${needGap}`,
+          ),
+        );
+        return;
+      }
+      if (followSide === "DIGITDIFF" && liveSignal.digitPercent > 9.0) {
+        setWaitReason(
+          `Follow · cold ${liveSignal.digitPercent.toFixed(1)}% soft · no buy`,
         );
         return;
       }
