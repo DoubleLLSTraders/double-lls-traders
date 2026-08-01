@@ -7,6 +7,7 @@ import type { MarketSignal } from "../lib/analysis/signal";
 import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
 import { isAnalyzerGood } from "../lib/analysis/analyzerGate";
+import { firmSteadyCheck } from "../lib/analysis/analyzerDirector";
 import { capStake, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
@@ -198,6 +199,9 @@ export function usePaperBot(options: {
    * Intentional sync — do not chase a signal that was already forming at Start.
    */
   const syncPhaseRef = useRef<"await-first" | "skip-first" | "live">("await-first");
+  /** Wall-clock cool-down after a loss — no buys until this clears. */
+  const coolUntilMsRef = useRef(0);
+  const LOSS_COOL_MS = 50_000;
 
   const entriesBlocked = () =>
     !runningRef.current ||
@@ -286,6 +290,7 @@ export function usePaperBot(options: {
     stuckSkipsRef.current = 0;
     lastSwitchEpochRef.current = 0;
     syncPhaseRef.current = "await-first";
+    coolUntilMsRef.current = 0;
     setRunsThisStart(0);
     setPnlThisStart(0);
 
@@ -587,14 +592,36 @@ export function usePaperBot(options: {
         ),
       );
 
-      // A loss is itself doubt — stop now.
+      // Loss → cool the tape, hop market, then continue only if runs remain.
       if (!won) {
-        onStopRef.current("Stopped · loss · will not risk the next trade.");
-        setLog((lines) =>
-          pushLog(lines, "STOPPED · loss · session closed regardless of take-profit / runs"),
+        coolUntilMsRef.current = Date.now() + LOSS_COOL_MS;
+        setWaitReason(
+          `Cooling ${Math.round(LOSS_COOL_MS / 1000)}s after loss · wait settle…`,
         );
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `COOL · loss · pause ${Math.round(LOSS_COOL_MS / 1000)}s · then hunt steady`,
+          ),
+        );
+        onSwitchMarketRef.current?.("Cooling · loss · next volatility");
+        if (
+          nextSettings.maxConsecutiveLosses > 0 &&
+          consecutiveLosses >= nextSettings.maxConsecutiveLosses
+        ) {
+          onStopRef.current(
+            `Stopped · ${consecutiveLosses} losses in a row · cool & review.`,
+          );
+          setLog((lines) =>
+            pushLog(
+              lines,
+              `STOPPED · ${consecutiveLosses} consecutive losses · session closed`,
+            ),
+          );
+        }
         return;
       }
+      coolUntilMsRef.current = 0;
 
       // Bot form owns the flow: Number of runs → Take profit / Stop loss.
       if (nextSettings.maxRuns > 0 && runsDone >= nextSettings.maxRuns) {
@@ -678,6 +705,15 @@ export function usePaperBot(options: {
         nextSession.lastCloseEpoch !== null &&
         latest.epoch - nextSession.lastCloseEpoch < nextSettings.cooldownTicks
       ) {
+        const left =
+          nextSettings.cooldownTicks -
+          (latest.epoch - nextSession.lastCloseEpoch);
+        setWaitReason(`Cooling · ${left} ticks after last trade…`);
+        return;
+      }
+      if (Date.now() < coolUntilMsRef.current) {
+        const sec = Math.ceil((coolUntilMsRef.current - Date.now()) / 1000);
+        setWaitReason(`Cooling · ${sec}s · tape settling after loss…`);
         return;
       }
 
@@ -795,7 +831,7 @@ export function usePaperBot(options: {
         onSwitchMarketRef.current?.("Low payout · next volatility");
         return;
       }
-      // INSTANT FIRE — Digits confirmed; buy this same tick, no re-research.
+      // INSTANT FIRE — Digits confirmed; still must be firm on this tick.
       if (analyzerBuyNowRef.current !== true) {
         setWaitReason("Follow · Trade now dropped · no buy");
         return;
@@ -803,6 +839,25 @@ export function usePaperBot(options: {
       // Barrier just printed on this tick — contract would be dead on arrival.
       if (followSide === "DIGITDIFF" && latest.digit === followDigit) {
         setWaitReason(`Follow · Digits reset · ${followDigit} printed`);
+        return;
+      }
+      const stillFirm = firmSteadyCheck(liveSignal, nextSettings);
+      if (!stillFirm.ok) {
+        setWaitReason(
+          `Follow · not steady · ${stillFirm.reason.replace(/^Analyzer ·/, "")}`,
+        );
+        setLog((lines) =>
+          pushLog(lines, `SKIP · unsteady at wire · ${stillFirm.reason}`),
+        );
+        return;
+      }
+      if (
+        liveSignal.digit !== followDigit ||
+        liveSignal.side !== followSide
+      ) {
+        setWaitReason(
+          `Follow · Digits moved · ${sideLabel} ${followDigit} → ${liveSignal.digit}`,
+        );
         return;
       }
 

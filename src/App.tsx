@@ -39,11 +39,16 @@ import { findBestMarket } from "./lib/analysis/bestMarket";
 import {
   advanceAnalyzerDirector,
   DEAD_MARKET_MS,
+  COLD_SETTLE_MS,
+  emptyTapeTemper,
   isPromisingSetup,
   MAX_MARKET_DWELL_MS,
   shouldHoldMarket,
+  shouldHuntOtherMarket,
+  STUCK_ALMOST_MS,
   type AnalyzerDirective,
   type AnalyzerHold,
+  type TapeTemper,
 } from "./lib/analysis/analyzerDirector";
 import {
   applyDiffersFastProfile,
@@ -365,6 +370,7 @@ export default function App() {
 
   // Analyzer director — advanced during render so Digits + desk share one tick.
   const analyzerHoldRef = useRef<AnalyzerHold | null>(null);
+  const tapeTemperRef = useRef<TapeTemper>(emptyTapeTemper());
   const analyzerEpochRef = useRef<number | null>(null);
   const [analyzerDirective, setAnalyzerDirective] =
     useState<AnalyzerDirective | null>(null);
@@ -395,8 +401,10 @@ export default function App() {
       symbol,
       signal,
       deskGate,
+      tapeTemperRef.current,
     );
     analyzerHoldRef.current = next.hold;
+    tapeTemperRef.current = next.temper;
     analyzerBuyNowRef.current = next.buyNow;
     analyzerSnapRef.current = {
       buyNow: next.buyNow,
@@ -447,6 +455,7 @@ export default function App() {
   useEffect(() => {
     analyzerHoldRef.current = null;
     analyzerEpochRef.current = null;
+    tapeTemperRef.current = emptyTapeTemper();
     analyzerBuyNowRef.current = false;
     analyzerSnapRef.current = {
       buyNow: false,
@@ -802,6 +811,7 @@ export default function App() {
     marketArriveRef.current = Date.now();
     analyzerHoldRef.current = null;
     analyzerBuyNowRef.current = false;
+    tapeTemperRef.current = emptyTapeTemper();
     analyzerSnapRef.current = {
       buyNow: false,
       digit: analyzerSnapRef.current.digit,
@@ -836,20 +846,50 @@ export default function App() {
       }
 
       const gate = botGateRef.current;
-      const marketAge = now - marketArriveRef.current;
-      const promising = isPromisingSetup(signalRef.current, {
+      const live = signalRef.current;
+      const desk = {
         minColdGap: gate.minColdGap,
         minSample: gate.minSample,
         maxMomentumGap: gate.maxMomentumGap,
         side: gate.side,
-      });
+      };
+      const marketAge = now - marketArriveRef.current;
+      const promising = isPromisingSetup(live, desk);
+      const huntAway = shouldHuntOtherMarket(live, desk);
+      const temper = tapeTemperRef.current;
+      const coldAge = now - temper.coldSinceMs;
+      // Let a new cold settle — do not hop mid-Cooling settle window.
+      if (
+        temper.flips < 3 &&
+        coldAge < COLD_SETTLE_MS + 1_500 &&
+        (live.watching.signalGap ?? 0) >= 3
+      ) {
+        deadSinceRef.current = null;
+        return;
+      }
 
-      // Soft Almost / stalled Lock — keep searching other volatilities.
+      // Hard cap — never sit forever on one volatility.
       if (marketAge >= MAX_MARKET_DWELL_MS) {
         void hopNextVolatility(
           gate.running
             ? "Hunting · search next steady"
             : "Analyze · search next steady",
+          true,
+        );
+        return;
+      }
+
+      // Pack-cold / leave-alone Almost — rotate fast across volatilities.
+      if (huntAway) {
+        if (deadSinceRef.current === null) {
+          deadSinceRef.current = now;
+          return;
+        }
+        if (now - deadSinceRef.current < STUCK_ALMOST_MS) return;
+        void hopNextVolatility(
+          gate.running
+            ? "Hunting · next volatility"
+            : "Analyze · next volatility",
           true,
         );
         return;
@@ -870,7 +910,7 @@ export default function App() {
           : "Live analyze · next volatility",
         true,
       );
-    }, 1000);
+    }, 800);
 
     return () => window.clearInterval(id);
   }, [

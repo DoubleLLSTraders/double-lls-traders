@@ -4,7 +4,7 @@ import { DIFFERS_FAST_PROFILE_VERSION } from "./differsProfile";
  * Desk settings schema — bump when bot defaults / gates change so stored
  * settings migrate cleanly.
  */
-export const BOT_SETTINGS_VERSION = 44;
+export const BOT_SETTINGS_VERSION = 47;
 
 /** Differs analyzer / entry profile revision. */
 export const BOT_PROFILE_VERSION = DIFFERS_FAST_PROFILE_VERSION;

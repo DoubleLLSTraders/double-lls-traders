@@ -96,11 +96,12 @@ export function DigitBars({
     if (
       director.label === "Locking" ||
       director.label === "Confirming" ||
-      director.label === "Almost"
+      director.label === "Almost" ||
+      director.label === "Cooling"
     ) {
       return {
         ...basePulse,
-        mood: "watch" as const,
+        mood: director.label === "Cooling" ? ("bounce" as const) : ("watch" as const),
         label: director.label,
         detail: director.detail,
       };
@@ -193,6 +194,7 @@ export function DigitBars({
       if (
         pulse.label !== "Locking" &&
         pulse.label !== "Confirming" &&
+        pulse.label !== "Cooling" &&
         pulse.mood !== "good"
       ) {
         alertKeyRef.current = "";

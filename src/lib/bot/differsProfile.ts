@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v19) — HIGH confidence; stay on building colds.
+ * Differs desk profile (v22) — cool hostile tape; pause after loss.
  *
- * Medium / soft left alone. Hunt parks while a #1 cold gap grows so HIGH
- * can form in minutes, not never. Skip 1st Trade now, then fire fast.
+ * Fast/flipping markets show Cooling. After a loss: 50s cool + hop, then
+ * hunt again. Two losses in a row stop the run.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 19;
+export const DIFFERS_FAST_PROFILE_VERSION = 22;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {
@@ -35,8 +35,9 @@ export const DIFFERS_FAST_GATES = {
   pauseIfBelowBreakEvenAfter: 0,
   pauseIfExpectancyNegativeAfter: 0,
   maxDrawdownPercent: 0,
-  maxTradesPerHour: 20,
-  cooldownTicks: 0,
+  maxTradesPerHour: 12,
+  /** After any settle, wait for the tape to cool before the next entry. */
+  cooldownTicks: 25,
   parallelExecution: true,
 } satisfies Partial<BotSettings>;
 
@@ -71,7 +72,8 @@ export const DIFFERS_FAST_MODE = {
 } satisfies Partial<BotSettings>;
 
 export const DIFFERS_FAST_TAKE_PROFIT = 0.2;
-export const DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES = 1;
+/** Stop the run after this many losses in a row (1st loss cools; 2nd stops). */
+export const DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES = 2;
 export const DIFFERS_FAST_SYMBOL = "R_75";
 
 export function createDiffersFastBotSettings(risk: DiffersFastRiskCaps): BotSettings {
@@ -119,7 +121,7 @@ export function isDiffersFastProfile(settings: BotSettings): boolean {
     settings.autoSide === false &&
     settings.autoFollow === true &&
     settings.martingale === false &&
-    settings.cooldownTicks === 0 &&
+    settings.cooldownTicks === DIFFERS_FAST_GATES.cooldownTicks &&
     settings.minColdGap === DIFFERS_FAST_GATES.minColdGap &&
     settings.requireTiming === true &&
     settings.maxConsecutiveLosses === DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES

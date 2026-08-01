@@ -12,32 +12,43 @@ import {
 } from "./analyzerGate";
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
+import {
+  advanceTapeTemper,
+  emptyTapeTemper,
+  readTapeTemper,
+  type TapeTemper,
+} from "./tapeTemper";
 
-/** Phase 1 — prove the cold is firm and stable (~4s on 1s indices). */
-export const LOCK_TICKS = 4;
-export const LOCK_MS = 4_000;
+export type { TapeTemper };
+export { emptyTapeTemper, COLD_SETTLE_MS } from "./tapeTemper";
 
-/** Phase 2 — brief anti-fade, then arm buy on the next ticks. */
-export const CONFIRM_TICKS = 2;
-export const CONFIRM_MS = 1_000;
+/** Phase 1 — prove the cold is firm and stable (~6s on 1s indices). */
+export const LOCK_TICKS = 6;
+export const LOCK_MS = 6_000;
+
+/** Phase 2 — anti-fade prove before Trade now (~2s more). */
+export const CONFIRM_TICKS = 3;
+export const CONFIRM_MS = 2_000;
 
 /** Differs must stay this cold while proving. Soft lukewarm = leave alone. */
-export const FIRM_COLD_MAX = 9.1;
+export const FIRM_COLD_MAX = 8.8;
 
 /** Composite power floor — below this the digit is not strong enough. */
-export const FIRM_POWER_MIN = 60;
+export const FIRM_POWER_MIN = 65;
 
 /** Gap air above minColdGap required for a steady market entry. */
-export const FIRM_GAP_AIR = 1;
+export const FIRM_GAP_AIR = 2;
 
 /** @deprecated */
 export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
 /** @deprecated */
 export const STEADY_MS = LOCK_MS + CONFIRM_MS;
 
-export const DEAD_MARKET_MS = 4_000;
-/** Dead tape rotates; building colds stay longer via isPromisingSetup. */
-export const MAX_MARKET_DWELL_MS = 40_000;
+export const DEAD_MARKET_MS = 3_500;
+/** Soft Almost / pack cold — hop and keep searching volatilities. */
+export const STUCK_ALMOST_MS = 5_000;
+/** Hard cap on one market even while a real cold is building. */
+export const MAX_MARKET_DWELL_MS = 18_000;
 
 type DeskSettings = Pick<
   BotSettings,
@@ -65,6 +76,8 @@ export interface AnalyzerDirective {
   detail: string;
   digit: number;
   side: MarketSignal["side"];
+  /** Updated tape temper for the next tick. */
+  temper: TapeTemper;
 }
 
 function holdKey(symbol: string, signal: MarketSignal): string {
@@ -128,6 +141,17 @@ export function firmSteadyCheck(
         reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > ${FIRM_COLD_MAX}% · not firm`,
       };
     }
+    // Unique Wilson OR a clearly solo deep cold (pack of two EV-ok colds is common).
+    const soloDeep =
+      signal.digitPercent <= 8.6 &&
+      gap >= firmGap &&
+      signal.power >= FIRM_POWER_MIN + 3;
+    if (!signal.uniqueEvOk && !soloDeep) {
+      return {
+        ok: false,
+        reason: `Analyzer · pack cold · hunt other market`,
+      };
+    }
   }
 
   return {
@@ -137,8 +161,8 @@ export function firmSteadyCheck(
 }
 
 /**
- * Stay while a real cold is building — do not hop every few seconds and
- * kill the gap before HIGH confidence can form.
+ * True only when this market can ripen into firm Trade now soon.
+ * Pack-cold / leave-alone Almosts return false so the carousel keeps hunting.
  */
 export function isPromisingSetup(
   signal: MarketSignal,
@@ -149,19 +173,26 @@ export function isPromisingSetup(
 
   const gap = signal.watching.signalGap ?? 0;
   const n = signal.watching.sampleSize;
-  if (n < 150) return false;
+  if (n < 200) return false;
   if (!signal.primaryBarrier || !signal.barrierAligned) return false;
-  if (signal.digitPercent > 9.2) return false;
-  // Gap growing on a firm-ish #1 cold — park and let it ripen to HIGH.
-  if (gap >= 2 && signal.digitPercent <= 9.2) return true;
-  if (
-    gap >= Math.max(3, settings.minColdGap - 2) &&
-    signal.digitPercent <= 9.1 &&
-    signal.power >= 40
-  ) {
-    return true;
-  }
+  if (!signal.separationOk || !signal.coldMarginOk) return false;
+  if (signal.digitPercent > 8.9) return false;
+  if (signal.power < 55) return false;
+  // Near firm: deep cold + air already, unique or solo-deep path open.
+  if (gap < settings.minColdGap) return false;
+  if (signal.uniqueEvOk) return true;
+  if (signal.digitPercent <= 8.6 && gap >= settings.minColdGap + 1) return true;
   return false;
+}
+
+/** Soft Almost that will not firm here — hunt another volatility. */
+export function shouldHuntOtherMarket(
+  signal: MarketSignal,
+  settings: DeskSettings,
+): boolean {
+  if (firmSteadyCheck(signal, settings).ok) return false;
+  if (isPromisingSetup(signal, settings)) return false;
+  return true;
 }
 
 export function shouldHoldMarket(
@@ -180,7 +211,8 @@ function watchResult(
   side: MarketSignal["side"],
   detail: string,
   gate: AnalyzerGateResult,
-  label: "Watch" | "Almost" = "Almost",
+  temper: TapeTemper,
+  label: "Watch" | "Almost" | "Cooling" = "Almost",
 ): AnalyzerDirective {
   return {
     gate,
@@ -190,6 +222,7 @@ function watchResult(
     detail,
     digit,
     side,
+    temper,
   };
 }
 
@@ -202,6 +235,7 @@ function restartLock(
   sideLabel: string,
   gate: AnalyzerGateResult,
   why: string,
+  temper: TapeTemper,
 ): AnalyzerDirective {
   const hold: AnalyzerHold = {
     key,
@@ -222,6 +256,7 @@ function restartLock(
     detail: `${sideLabel} ${digit} · ${why} · 1/${LOCK_TICKS} · gap ${gap}`,
     digit,
     side,
+    temper,
   };
 }
 
@@ -230,12 +265,32 @@ export function advanceAnalyzerDirector(
   symbol: string,
   signal: MarketSignal,
   settings: DeskSettings,
+  prevTemper: TapeTemper | null = null,
   nowMs: number = Date.now(),
 ): AnalyzerDirective {
   const digit = signal.digit;
   const side = signal.side;
   const sideLabel = side === "DIGITMATCH" ? "Matches" : "Differs";
   const gap = signal.watching.signalGap ?? 0;
+  const temper = advanceTapeTemper(
+    prevTemper ?? emptyTapeTemper(nowMs),
+    signal,
+    nowMs,
+  );
+  const tape = readTapeTemper(temper, signal, nowMs);
+
+  // Fast / hostile tape — wait for cool-down before any lock.
+  if (!tape.ok) {
+    return watchResult(
+      digit,
+      side,
+      tape.reason.replace(/^Cooling · /, ""),
+      { ok: false, reason: `Analyzer · ${tape.reason}` },
+      temper,
+      "Cooling",
+    );
+  }
+
   const firm = firmSteadyCheck(signal, settings);
 
   if (!firm.ok) {
@@ -245,6 +300,7 @@ export function advanceAnalyzerDirector(
       side,
       firm.reason.replace(/^Analyzer ·/, ""),
       firm,
+      temper,
       soft.ok ? "Almost" : "Watch",
     );
   }
@@ -261,12 +317,16 @@ export function advanceAnalyzerDirector(
       sideLabel,
       firm,
       "firm cold",
+      temper,
     );
   }
 
-  // Real fade (2+ ticks of gap loss) or floor dropped under firm air → leave alone.
+  // Any gap shrink or under firm air → not steady — restart / leave alone.
   const firmGap = firmGapFloor(settings, side);
-  if (side === "DIGITDIFF" && (gap < firmGap || gap < prev.floorGap - 1)) {
+  if (
+    side === "DIGITDIFF" &&
+    (gap < firmGap || gap < prev.lastGap || gap < prev.floorGap)
+  ) {
     return restartLock(
       key,
       digit,
@@ -276,13 +336,14 @@ export function advanceAnalyzerDirector(
       sideLabel,
       firm,
       "gap not steady",
+      temper,
     );
   }
 
   const heldMs = nowMs - prev.sinceMs;
   const count = prev.count + 1;
   const floorGap = Math.min(prev.floorGap, gap);
-  const trackedGap = Math.max(gap, prev.lastGap);
+  const trackedGap = gap;
 
   // ── Phase 1: Locking — same firm digit, steady market ───────────────
   if (prev.phase === "lock") {
@@ -304,6 +365,7 @@ export function advanceAnalyzerDirector(
         detail: `${sideLabel} ${digit} · firm lock ${Math.min(count, LOCK_TICKS)}/${LOCK_TICKS} · ${Math.round(Math.min(heldMs, LOCK_MS) / 100) / 10}s · gap ${gap} · p${signal.power}`,
         digit,
         side,
+        temper,
       };
     }
     const confirmHold: AnalyzerHold = {
@@ -325,6 +387,7 @@ export function advanceAnalyzerDirector(
       detail: `${sideLabel} ${digit} · confirm 1/${CONFIRM_TICKS} · still firm · gap ${gap}`,
       digit,
       side,
+      temper,
     };
   }
 
@@ -347,6 +410,7 @@ export function advanceAnalyzerDirector(
       detail: `${sideLabel} ${digit} · confirm ${Math.min(count, CONFIRM_TICKS)}/${CONFIRM_TICKS} · ${Math.round(Math.min(heldMs, CONFIRM_MS) / 100) / 10}s · gap ${gap}`,
       digit,
       side,
+      temper,
     };
   }
 
@@ -360,6 +424,7 @@ export function advanceAnalyzerDirector(
     detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${firmGap} · cold ${pct}% · power ${signal.power} · firm ${totalSec}s`,
     digit,
     side,
+    temper,
   };
 }
 
