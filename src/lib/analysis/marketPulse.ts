@@ -1,5 +1,5 @@
 import type { DigitStats } from "./digits";
-import type { MarketSignal } from "./signal";
+import { isArmedSignal, type MarketSignal } from "./signal";
 
 export type MarketMood = "loading" | "good" | "watch" | "bounce" | "flat" | "bad";
 
@@ -10,9 +10,9 @@ export interface MarketPulse {
 }
 
 /**
- * Live desk mood — actionable Differs readiness, updated every tick.
- * Prefers "Trade now" / "Good market" when a cold barrier is usable;
- * "Bouncing" only when the tape is truly flipping.
+ * Live desk mood — must match what the bot can actually fire.
+ * "Good / Trade now" only when the Differs signal is armed or fully confirmed;
+ * soft gap-only reads stay on Watch so the panel does not lie about readiness.
  */
 export function readMarketPulse(
   stats: DigitStats,
@@ -51,18 +51,11 @@ export function readMarketPulse(
   const signalGap = signal?.watching.signalGap ?? coldGap;
   const signalDigit = signal?.digit ?? cold;
   const differs =
-    !signal || signal.side === "DIGITDIFF"
-      ? signal
-      : null;
+    !signal || signal.side === "DIGITDIFF" ? signal : null;
 
-  // ── Trade now / Good first (so it is not drowned by bounce) ──────────
+  // ── Only claim ready when the bot gates can pass ─────────────────────
 
-  if (
-    differs &&
-    (differs.confidence === "high" || differs.power >= 80) &&
-    differs.timingOk &&
-    differs.barrierAligned
-  ) {
+  if (differs && isArmedSignal(differs)) {
     return {
       mood: "good",
       label: "Trade now",
@@ -72,15 +65,31 @@ export function readMarketPulse(
 
   if (
     differs &&
+    differs.confidence === "high" &&
     differs.timingOk &&
-    differs.primaryBarrier &&
     differs.evOk &&
-    (signalGap ?? 0) >= 4
+    differs.barrierAligned
   ) {
     return {
       mood: "good",
       label: "Good market",
-      detail: `Cold ${differs.digit} ready · gap ${signalGap} · ${differs.digitPercent.toFixed(1)}%`,
+      detail: `Cold ${differs.digit} armed path · gap ${signalGap} · power ${differs.power}`,
+    };
+  }
+
+  if (
+    differs &&
+    differs.evOk &&
+    differs.timingOk &&
+    differs.barrierAligned &&
+    differs.windowsAgree &&
+    differs.structureOk &&
+    (signalGap ?? 0) >= 4
+  ) {
+    return {
+      mood: "watch",
+      label: "Almost",
+      detail: `Differs ${differs.digit} · ${differs.confidence} · power ${differs.power} · need high/armed`,
     };
   }
 
@@ -91,13 +100,13 @@ export function readMarketPulse(
     (signalGap ?? 0) >= 4
   ) {
     return {
-      mood: "good",
-      label: "Good · ready",
-      detail: `Differs ${differs.digit} · gap ${signalGap} · ${differs.confidence} · power ${differs.power}`,
+      mood: "watch",
+      label: "Building",
+      detail: `Differs ${differs.digit} · gap ${signalGap} · ${differs.confidence} · power ${differs.power} · waiting EV/confirms`,
     };
   }
 
-  // Practical window read — usable cold even if % lead is tiny.
+  // Practical cold forming — watch, not "good" (bot will not fire on this alone).
   if (
     coldGap !== null &&
     coldGap >= 5 &&
@@ -106,21 +115,13 @@ export function readMarketPulse(
     sampleSize >= 100
   ) {
     return {
-      mood: "good",
-      label: "Good market",
+      mood: "watch",
+      label: "Building",
       detail: `Cold ${cold} · ${coldPct.toFixed(1)}% · gap ${coldGap} · lead ${countLead} ticks`,
     };
   }
 
-  if (coldGap !== null && coldGap >= 8 && coldPct <= 9.2 && sampleSize >= 150) {
-    return {
-      mood: "good",
-      label: "Trade now",
-      detail: `Cold ${cold} deep absence · gap ${coldGap} · ${coldPct.toFixed(1)}%`,
-    };
-  }
-
-  // ── Real bounce / reset (narrow) ─────────────────────────────────────
+  // ── Bounce / reset ───────────────────────────────────────────────────
 
   if (coldGap === 0) {
     return {
@@ -138,7 +139,6 @@ export function readMarketPulse(
     };
   }
 
-  // True race: same count AND short gap — otherwise call it flat/watch.
   if (countLead === 0 && coldGap !== null && coldGap < 3 && sampleSize >= 100) {
     return {
       mood: "bounce",

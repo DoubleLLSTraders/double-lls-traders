@@ -86,6 +86,12 @@ export interface SignalOptions {
   minColdGap?: number;
   /** Break-even depends on the index — R_100 pays worse than the rest. */
   symbol?: string;
+  /**
+   * Sample floor for high/armed confidence. Must match bot.minSample —
+   * if the primary window is shorter than this, high can never arm and
+   * the bot will hunt forever.
+   */
+  minSampleForHigh?: number;
 }
 
 function windowReady(sampleSize: number, size: number): boolean {
@@ -273,6 +279,7 @@ export function buildMarketSignal(
   const minEdge = options.minEdgePercent ?? 0;
   const maxMomentumGap = options.maxMomentumGap ?? 2;
   const minColdGap = options.minColdGap ?? 8;
+  const minSampleForHigh = options.minSampleForHigh ?? 1500;
   const evenPct = stats.sampleSize === 0 ? 0 : (stats.evenCount / stats.sampleSize) * 100;
   const primaryDigit = pickStableDigit(stats, preferredSide, fallbackDigit);
   const vote = windowVotes(
@@ -405,7 +412,7 @@ export function buildMarketSignal(
     (preferredSide === "DIGITDIFF"
       ? signalGap >= minColdGap + 2
       : signalGap <= Math.max(0, maxMomentumGap - 1));
-  const sampleElite = stats.sampleSize >= 1500;
+  const sampleElite = stats.sampleSize >= minSampleForHigh;
   const highArmed =
     allConfirm &&
     barrierAligned &&

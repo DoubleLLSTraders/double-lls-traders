@@ -132,11 +132,17 @@ function signalForDigits(
   digits: number[],
   settings: Pick<
     BotSettings,
-    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
+    | "prediction"
+    | "minEdgePercent"
+    | "maxMomentumGap"
+    | "minColdGap"
+    | "sidePreference"
+    | "minSample"
   >,
   symbol: string,
 ): MarketSignal {
-  const stats = summarise(digits.slice(-PRIMARY_WINDOW));
+  const primary = Math.max(PRIMARY_WINDOW, settings.minSample ?? PRIMARY_WINDOW);
+  const stats = summarise(digits.slice(-primary));
   const windowStats = WINDOW_SIZES.map((size) => summarise(digits.slice(-size)));
   const options = {
     windowStats,
@@ -144,6 +150,7 @@ function signalForDigits(
     minEdgePercent: settings.minEdgePercent,
     maxMomentumGap: settings.maxMomentumGap,
     minColdGap: settings.minColdGap,
+    minSampleForHigh: settings.minSample ?? PRIMARY_WINDOW,
     symbol,
   };
   const match = buildMarketSignal(stats, "DIGITMATCH", settings.prediction, options);
@@ -191,30 +198,31 @@ function isTradeReady(
  * Falls back to `fallbackSymbol` if the scan fails entirely — unless
  * `requireReady` is set, in which case a null means "nothing is tradeable".
  */
+type ScanSettings = Pick<
+  BotSettings,
+  | "prediction"
+  | "minEdgePercent"
+  | "maxMomentumGap"
+  | "minColdGap"
+  | "sidePreference"
+  | "minSample"
+>;
+
 export async function findBestMarket(
   client: DerivClient,
-  settings: Pick<
-    BotSettings,
-    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
-  >,
+  settings: ScanSettings,
   fallbackSymbol: string,
   options: FindBestMarketOptions & { requireReady: true },
 ): Promise<MarketScanResult | null>;
 export async function findBestMarket(
   client: DerivClient,
-  settings: Pick<
-    BotSettings,
-    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
-  >,
+  settings: ScanSettings,
   fallbackSymbol: string,
   options?: FindBestMarketOptions,
 ): Promise<MarketScanResult>;
 export async function findBestMarket(
   client: DerivClient,
-  settings: Pick<
-    BotSettings,
-    "prediction" | "minEdgePercent" | "maxMomentumGap" | "minColdGap" | "sidePreference"
-  >,
+  settings: ScanSettings,
   fallbackSymbol: string,
   options: FindBestMarketOptions = {},
 ): Promise<MarketScanResult | null> {

@@ -58,11 +58,12 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     return { ok: false, reason: `Deep · ${symbol} low payout · get out` };
   }
 
-  const minSample = Math.max(settings.minSample, 1500);
-  if (signal.watching.sampleSize < minSample) {
+  // Match the form / profile floor — do not raise above settings.minSample
+  // while the live signal window is built to that same size (see App tradeStats).
+  if (signal.watching.sampleSize < settings.minSample) {
     return {
       ok: false,
-      reason: `Deep · sample ${signal.watching.sampleSize}/${minSample} too thin`,
+      reason: `Deep · sample ${signal.watching.sampleSize}/${settings.minSample} too thin`,
     };
   }
 

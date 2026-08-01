@@ -54,7 +54,7 @@ import {
   subscribeAiBankroll,
 } from "./lib/ai/bankroll";
 
-const WINDOW_SIZES = [250, 500, 1000, 2000] as const;
+const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
 /**
  * Windows used for multi-window agreement on the bot signal.
  *
@@ -63,7 +63,8 @@ const WINDOW_SIZES = [250, 500, 1000, 2000] as const;
  */
 const AGREEMENT_WINDOWS = [1000, 1500, 2000] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
-const BOT_SETTINGS_VERSION = 30;
+/** v31: trade signal uses ≥ minSample ticks so high/armed can fire. */
+const BOT_SETTINGS_VERSION = 31;
 
 /** Wait for the feed to reload after switching volatility index. */
 async function waitForSymbolFeed(
@@ -256,7 +257,7 @@ export default function App() {
   const [symbol, setSymbol] = useState(() =>
     isLowPayoutSymbol(config.symbol) ? DIFFERS_FAST_SYMBOL : config.symbol,
   );
-  const [windowSize, setWindowSize] = useState<number>(1000);
+  const [windowSize, setWindowSize] = useState<number>(1500);
   const [selectedDigit, setSelectedDigit] = useState<number | null>(null);
   const [bot, setBot] = useState<BotSettings>(() => loadBotSettings());
   const [timerNote, setTimerNote] = useState<string | null>(null);
@@ -287,9 +288,13 @@ export default function App() {
 
   // Preload more than the largest window so signals are valid immediately.
   const feed = useDerivFeed(symbol, 2500);
-  const stats = useMemo(
-    () => summarise(feed.digits.slice(-windowSize)),
-    [feed.digits, windowSize],
+  // Bot + Digits use ≥ minSample ticks. A shorter UI window used to feed the
+  // signal (often 1000) while gates demanded 1500 — Digits said Good·ready
+  // but high/armed could never clear, so the bot hunted forever.
+  const tradeWindow = Math.max(windowSize, bot.minSample, 1500);
+  const tradeStats = useMemo(
+    () => summarise(feed.digits.slice(-tradeWindow)),
+    [feed.digits, tradeWindow],
   );
   const agreementStats = useMemo(
     () => AGREEMENT_WINDOWS.map((size) => summarise(feed.digits.slice(-size))),
@@ -302,18 +307,28 @@ export default function App() {
       minEdgePercent: bot.minEdgePercent,
       maxMomentumGap: bot.maxMomentumGap,
       minColdGap: bot.minColdGap,
+      minSampleForHigh: bot.minSample,
       symbol,
     }),
-    [agreementStats, bot.minEdgePercent, bot.maxMomentumGap, bot.minColdGap, symbol],
+    [
+      agreementStats,
+      bot.minEdgePercent,
+      bot.maxMomentumGap,
+      bot.minColdGap,
+      bot.minSample,
+      symbol,
+    ],
   );
 
   const matchSignal = useMemo(
-    () => buildMarketSignal(stats, "DIGITMATCH", bot.prediction, signalOptions),
-    [stats, bot.prediction, signalOptions],
+    () =>
+      buildMarketSignal(tradeStats, "DIGITMATCH", bot.prediction, signalOptions),
+    [tradeStats, bot.prediction, signalOptions],
   );
   const diffSignal = useMemo(
-    () => buildMarketSignal(stats, "DIGITDIFF", bot.prediction, signalOptions),
-    [stats, bot.prediction, signalOptions],
+    () =>
+      buildMarketSignal(tradeStats, "DIGITDIFF", bot.prediction, signalOptions),
+    [tradeStats, bot.prediction, signalOptions],
   );
   const signal = useMemo(() => {
     if (bot.autoSide) {
@@ -765,7 +780,11 @@ export default function App() {
                   ? ("differs" as const)
                   : ("matches" as const),
             };
-        const best = await findBestMarket(feed.client, scanBot, symbol);
+        // Prefer an already-armed market so Start does not land on a soft
+        // setup the live elite gates will never fire.
+        const best = await findBestMarket(feed.client, scanBot, symbol, {
+          preferReady: !fromOperator,
+        });
         if (!scanActiveRef.current) return;
         const side = fromOperator
           ? ("DIGITMATCH" as const)
@@ -1071,6 +1090,7 @@ export default function App() {
                     {WINDOW_SIZES.map((size) => (
                       <option key={size} value={size}>
                         last {size}
+                        {size < bot.minSample ? " · display" : ""}
                       </option>
                     ))}
                   </select>
@@ -1230,7 +1250,7 @@ export default function App() {
               </div>
               <aside className="workspace__side">
                 <DigitBars
-                  stats={stats}
+                  stats={tradeStats}
                   latestDigit={latest?.digit ?? null}
                   signal={diffSignal}
                   selectedDigit={
@@ -1241,7 +1261,7 @@ export default function App() {
                   }
                 />
                 <StatsPanel
-                  stats={stats}
+                  stats={tradeStats}
                   selectedDigit={
                     aiOperator.state.armed ? bot.prediction : selectedDigit
                   }
@@ -1273,7 +1293,7 @@ export default function App() {
               <ResizableSplit
                 left={
                   <AnalyzerPopup
-                    stats={stats}
+                    stats={tradeStats}
                     signal={signal}
                     matchSignal={matchSignal}
                     diffSignal={diffSignal}
