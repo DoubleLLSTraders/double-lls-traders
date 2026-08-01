@@ -285,7 +285,13 @@ export class DerivClient {
     this.clearHeartbeat();
     this.heartbeat = setInterval(() => {
       this.send({ ping: 1 }).catch(() => {
-        // The close handler drives reconnection; a failed ping needs no action.
+        // Half-open sockets stay "ready" with a frozen chart. Force close so
+        // handleClose → scheduleReconnect restores the live stream.
+        try {
+          this.socket?.close();
+        } catch {
+          this.scheduleReconnect();
+        }
       });
     }, HEARTBEAT_MS);
   }

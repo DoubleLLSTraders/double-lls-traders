@@ -2272,13 +2272,123 @@ html[data-theme="light"] .digit-tile__tip {
   white-space: nowrap;
 }
 
+.digit-map__pulse {
+  margin: 12px 0 0;
+  padding: 10px 11px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line-faint);
+  background: var(--surface-deep);
+}
+
+.digit-map__pulse-main {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.digit-map__pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.digit-map__pulse-main strong {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.digit-map__pulse-main em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.digit-map__pulse--good {
+  border-color: color-mix(in srgb, var(--digit-high) 45%, var(--line-faint));
+  background: color-mix(in srgb, var(--digit-high) 10%, var(--surface-deep));
+}
+
+.digit-map__pulse--good .digit-map__pulse-dot {
+  background: var(--digit-high);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--digit-high) 28%, transparent);
+}
+
+.digit-map__pulse--good .digit-map__pulse-main strong {
+  color: var(--digit-high);
+  font-size: 14px;
+  letter-spacing: -0.03em;
+}
+
+.digit-map__pulse--good .digit-map__pulse-dot {
+  animation: digit-live-dot 1.4s ease infinite;
+}
+
+.digit-map__pulse--watch,
+.digit-map__pulse--loading {
+  border-color: color-mix(in srgb, var(--digit-second) 40%, var(--line-faint));
+}
+
+.digit-map__pulse--watch .digit-map__pulse-dot,
+.digit-map__pulse--loading .digit-map__pulse-dot {
+  background: var(--digit-second);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--digit-second) 24%, transparent);
+}
+
+.digit-map__pulse--watch .digit-map__pulse-main strong,
+.digit-map__pulse--loading .digit-map__pulse-main strong {
+  color: var(--digit-second);
+}
+
+.digit-map__pulse--bounce {
+  border-color: color-mix(in srgb, var(--hot) 40%, var(--line-faint));
+  background: color-mix(in srgb, var(--hot) 8%, var(--surface-deep));
+}
+
+.digit-map__pulse--bounce .digit-map__pulse-dot {
+  background: var(--hot);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hot) 22%, transparent);
+  animation: digit-live-dot 1.1s ease infinite;
+}
+
+.digit-map__pulse--bounce .digit-map__pulse-main strong {
+  color: var(--hot);
+}
+
+.digit-map__pulse--flat {
+  border-color: var(--line-faint);
+}
+
+.digit-map__pulse--bad {
+  border-color: color-mix(in srgb, var(--digit-low) 45%, var(--line-faint));
+  background: color-mix(in srgb, var(--digit-low) 8%, var(--surface-deep));
+}
+
+.digit-map__pulse--bad .digit-map__pulse-dot {
+  background: var(--digit-low);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--digit-low) 22%, transparent);
+}
+
+.digit-map__pulse--bad .digit-map__pulse-main strong {
+  color: var(--digit-low);
+}
+
 .digit-map__legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px 14px;
-  margin: 12px 0 0;
-  padding-top: 10px;
+  margin: 0;
+  padding-top: 8px;
   border-top: 1px solid var(--line-faint);
   font-family: var(--font-mono);
   font-size: 10px;

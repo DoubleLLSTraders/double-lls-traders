@@ -33,47 +33,59 @@ function githubPagesExtras(): Plugin {
   };
 }
 
-/** Redirect old bookmark paths to the current base path. */
+/**
+ * Redirect old bookmark paths.
+ *
+ * Local (base "/"): /double-lls-traders/* and /brick-trader/* → /*
+ * Pages (base "/double-lls-traders/"): only /brick-trader/* → /double-lls-traders/*
+ * Never redirect a path that is already the active base — that caused
+ * ERR_TOO_MANY_REDIRECTS on localhost:/double-lls-traders/.
+ */
 function legacyPathRedirect(): Plugin {
+  function rewrite(raw: string): string | null {
+    const path = raw.split("?")[0] ?? "";
+    const suffix = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
+
+    if (isPagesBuild) {
+      if (!path.startsWith("/brick-trader")) return null;
+      const rest = path.slice("/brick-trader".length) || "/";
+      const root = `/${PAGES_REPO}`;
+      return `${root}${rest.startsWith("/") ? rest : `/${rest}`}${suffix}`;
+    }
+
+    // Local dev / preview — strip both legacy prefixes to site root.
+    if (path.startsWith("/brick-trader")) {
+      const rest = path.slice("/brick-trader".length) || "/";
+      return `${rest.startsWith("/") ? rest : `/${rest}`}${suffix}`;
+    }
+    if (path.startsWith("/double-lls-traders")) {
+      const rest = path.slice("/double-lls-traders".length) || "/";
+      return `${rest.startsWith("/") ? rest : `/${rest}`}${suffix}`;
+    }
+    return null;
+  }
+
+  function middleware(
+    req: { url?: string },
+    res: { writeHead: (code: number, headers: Record<string, string>) => void; end: () => void },
+    next: () => void,
+  ) {
+    const target = rewrite(req.url ?? "");
+    if (!target || target === (req.url ?? "")) {
+      next();
+      return;
+    }
+    res.writeHead(302, { Location: target });
+    res.end();
+  }
+
   return {
     name: "legacy-path-redirect",
     configureServer(server) {
-      server.middlewares.use((req, res, next) => {
-        const raw = req.url ?? "";
-        const path = raw.split("?")[0] ?? "";
-        if (!path.startsWith("/brick-trader") && !path.startsWith("/double-lls-traders")) {
-          next();
-          return;
-        }
-        const rest =
-          path.startsWith("/brick-trader")
-            ? path.slice("/brick-trader".length) || "/"
-            : path.slice("/double-lls-traders".length) || "/";
-        const suffix = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
-        const root = base === "/" ? "" : base.replace(/\/$/, "");
-        const target = `${root}${rest}${suffix}`;
-        res.writeHead(302, { Location: target });
-        res.end();
-      });
+      server.middlewares.use(middleware);
     },
     configurePreviewServer(server) {
-      server.middlewares.use((req, res, next) => {
-        const raw = req.url ?? "";
-        const path = raw.split("?")[0] ?? "";
-        if (!path.startsWith("/brick-trader") && !path.startsWith("/double-lls-traders")) {
-          next();
-          return;
-        }
-        const rest =
-          path.startsWith("/brick-trader")
-            ? path.slice("/brick-trader".length) || "/"
-            : path.slice("/double-lls-traders".length) || "/";
-        const suffix = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
-        const root = base === "/" ? "" : base.replace(/\/$/, "");
-        const target = `${root}${rest}${suffix}`;
-        res.writeHead(302, { Location: target });
-        res.end();
-      });
+      server.middlewares.use(middleware);
     },
   };
 }
@@ -81,4 +93,8 @@ function legacyPathRedirect(): Plugin {
 export default defineConfig({
   base,
   plugins: [react(), legacyPathRedirect(), githubPagesExtras()],
+  server: {
+    port: 5173,
+    strictPort: false,
+  },
 });

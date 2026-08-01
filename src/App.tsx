@@ -69,7 +69,13 @@ const BOT_SETTINGS_VERSION = 30;
 async function waitForSymbolFeed(
   targetSymbol: string,
   minTicks: number,
-  readSnapshot: () => { symbol: string; state: string; tickCount: number },
+  readSnapshot: () => {
+    symbol: string;
+    streamSymbol: string | null;
+    state: string;
+    tickCount: number;
+    switching: boolean;
+  },
   cancelled: () => boolean,
   timeoutMs = 20000,
 ): Promise<boolean> {
@@ -77,9 +83,11 @@ async function waitForSymbolFeed(
   while (Date.now() < deadline) {
     if (cancelled()) return false;
     const snap = readSnapshot();
+    // Wait until the live stream is on the target symbol (not just React state).
     if (
-      snap.symbol === targetSymbol &&
+      snap.streamSymbol === targetSymbol &&
       snap.state === "ready" &&
+      !snap.switching &&
       snap.tickCount >= minTicks
     ) {
       return true;
@@ -336,13 +344,17 @@ export default function App() {
   signalRef.current = signal;
   const feedSnapshotRef = useRef({
     symbol,
+    streamSymbol: feed.streamSymbol,
     state: feed.state,
     tickCount: feed.ticks.length,
+    switching: feed.switching,
   });
   feedSnapshotRef.current = {
     symbol,
+    streamSymbol: feed.streamSymbol,
     state: feed.state,
     tickCount: feed.ticks.length,
+    switching: feed.switching,
   };
   const latest = feed.ticks[feed.ticks.length - 1];
 
@@ -388,6 +400,8 @@ export default function App() {
           },
         );
         if (best.symbol !== symbol) {
+          // Hold bot while the tick stream hot-swaps — no full reconnect.
+          switchHoldRef.current = true;
           setSymbol(best.symbol);
           setBot((current) => ({
             ...current,
@@ -396,17 +410,33 @@ export default function App() {
             autoFollow: true,
           }));
           setTimerNote(
-            note ?? `Auto · ${best.name} · ${best.signal.label}`,
+            note ?? `Auto · ${best.name} · loading live ticks…`,
           );
+          const ready = await waitForSymbolFeed(
+            best.symbol,
+            Math.max(500, bot.minSample),
+            () => feedSnapshotRef.current,
+            () => botHaltRef.current,
+            20000,
+          );
+          switchHoldRef.current = false;
+          if (!ready) {
+            setTimerNote(`${best.name} · feed slow after switch`);
+          } else {
+            setTimerNote(
+              note ?? `Auto · ${best.name} · ${best.signal.label}`,
+            );
+          }
         } else if (note) {
           setTimerNote(note);
         }
         return best;
       } finally {
+        switchHoldRef.current = false;
         marketSwitchBusy.current = false;
       }
     },
-    [feed.client, feed.state, scanBotSettings, symbol],
+    [feed.client, feed.state, scanBotSettings, symbol, bot.minSample],
   );
 
   /**
@@ -777,17 +807,24 @@ export default function App() {
         }));
         const pickedSymbol = best.symbol;
         if (pickedSymbol !== symbol) {
+          switchHoldRef.current = true;
           setSymbol(pickedSymbol);
-          setTimerNote(`Switching to ${best.name} · loading ticks…`);
+          setTimerNote(`Switching to ${best.name} · loading live ticks…`);
           const feedReady = await waitForSymbolFeed(
             pickedSymbol,
             botForStart.minSample,
             () => feedSnapshotRef.current,
             () => !scanActiveRef.current,
           );
+          switchHoldRef.current = false;
           if (!scanActiveRef.current) return;
           if (!feedReady) {
-            setTimerNote(`${best.name} · feed slow · using scan pick`);
+            setTimerNote(
+              `${best.name} · live feed not ready · start cancelled (no blind trade)`,
+            );
+            scanActiveRef.current = false;
+            setScanningMarket(false);
+            return;
           }
         }
         setTimerNote(
@@ -1177,6 +1214,7 @@ export default function App() {
                 <TickChart
                   ticks={feed.ticks}
                   symbol={symbol}
+                  syncing={feed.switching || feed.streamSymbol !== symbol}
                   tradeMarkers={paper.session.journal
                     .filter(
                       (entry) =>
@@ -1193,6 +1231,8 @@ export default function App() {
               <aside className="workspace__side">
                 <DigitBars
                   stats={stats}
+                  latestDigit={latest?.digit ?? null}
+                  signal={diffSignal}
                   selectedDigit={
                     aiOperator.state.armed ? bot.prediction : selectedDigit
                   }

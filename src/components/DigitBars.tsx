@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DIGITS } from "../lib/analysis/digits";
 import type { DigitStats } from "../lib/analysis/digits";
+import { readMarketPulse } from "../lib/analysis/marketPulse";
+import type { MarketSignal } from "../lib/analysis/signal";
 
 type Tone = "high" | "second" | "low" | "neutral";
 
@@ -10,6 +12,8 @@ interface DigitBarsProps {
   onSelectDigit: (digit: number) => void;
   /** Most recent live digit — pulses on the matching tile. */
   latestDigit?: number | null;
+  /** Live analyzer signal — sharpens the market mood readout. */
+  signal?: MarketSignal | null;
 }
 
 function toneByRank(counts: number[], sampleSize: number): Tone[] {
@@ -40,12 +44,14 @@ export function DigitBars({
   selectedDigit,
   onSelectDigit,
   latestDigit = null,
+  signal = null,
 }: DigitBarsProps) {
   const { counts, percentages, sampleSize, gaps, hottest, coldest } = stats;
   const tones = toneByRank(counts, sampleSize);
   const maxPct = Math.max(...percentages, 10);
   const [pulseDigit, setPulseDigit] = useState<number | null>(null);
   const [hoverDigit, setHoverDigit] = useState<number | null>(null);
+  const pulse = useMemo(() => readMarketPulse(stats, signal), [stats, signal]);
 
   useEffect(() => {
     if (latestDigit === null || latestDigit === undefined) return;
@@ -150,14 +156,21 @@ export function DigitBars({
         })}
       </div>
 
-      <p className="digit-map__legend">
-        <span className="is-high">Hot</span>
-        <span className="is-low">Cold</span>
-        <span>Fair 10%</span>
-        {latestDigit !== null && latestDigit !== undefined ? (
-          <span className="digit-map__legend-live">Live · {latestDigit}</span>
-        ) : null}
-      </p>
+      <div className={`digit-map__pulse digit-map__pulse--${pulse.mood}`} title={pulse.detail}>
+        <div className="digit-map__pulse-main">
+          <span className="digit-map__pulse-dot" aria-hidden="true" />
+          <strong>{pulse.label}</strong>
+          <em>{pulse.detail}</em>
+        </div>
+        <div className="digit-map__legend">
+          <span className="is-high">Hot</span>
+          <span className="is-low">Cold</span>
+          <span>Fair 10%</span>
+          {latestDigit !== null && latestDigit !== undefined ? (
+            <span className="digit-map__legend-live">Live · {latestDigit}</span>
+          ) : null}
+        </div>
+      </div>
     </section>
   );
 }

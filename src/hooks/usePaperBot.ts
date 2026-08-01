@@ -189,12 +189,13 @@ export function usePaperBot(options: {
   onSwitchMarketRef.current = onSwitchMarket;
   tradeNoteRef.current = tradeNote;
 
-  // Fresh market: drop the cooled barrier from the previous index and reset
-  // the stuck-skip counter so we do not immediately re-request a switch.
+  // Fresh market: drop cooled barrier, stuck skips, and tick cursor so the
+  // bot picks up the new stream without needing a page refresh.
   useEffect(() => {
     if (symbolRef.current === symbol) return;
     symbolRef.current = symbol;
     stuckSkipsRef.current = 0;
+    handledEpoch.current = null;
     setSession((prev) => {
       if (prev.coolBarrierDigit === null) return prev;
       const next = { ...prev, coolBarrierDigit: null };

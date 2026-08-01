@@ -28,6 +28,10 @@ export interface DerivFeed {
   currency: string;
   ticks: Tick[];
   digits: number[];
+  /** Symbol the live tick stream is currently subscribed to. */
+  streamSymbol: string | null;
+  /** True while a symbol switch is loading history (old ticks kept until replace). */
+  switching: boolean;
   client: DerivClient | null;
   reconnect: () => void;
 }
@@ -55,14 +59,28 @@ function waitForReady(client: DerivClient): Promise<void> {
   });
 }
 
+/**
+ * Live Deriv feed.
+ *
+ * The WebSocket stays up across market changes. Only the tick subscription is
+ * swapped, so Start / market pick continues without a full page-style refresh:
+ * chart and digits keep the previous stream until the new history arrives, then
+ * replace in one shot and keep appending live ticks.
+ */
 export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
   const clientRef = useRef<DerivClient | null>(null);
+  const tickStopRef = useRef<(() => void) | null>(null);
+  const symbolRef = useRef(symbol);
+  symbolRef.current = symbol;
+
   const [client, setClient] = useState<DerivClient | null>(null);
   const [state, setState] = useState<ConnectionState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [account, setAccount] = useState<OptionsAccount | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [ticks, setTicks] = useState<Tick[]>([]);
+  const [streamSymbol, setStreamSymbol] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const accountKind = useSyncExternalStore(subscribeAccountKind, getAccountKind, getAccountKind);
 
@@ -71,6 +89,7 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
     setAttempt((value) => value + 1);
   }, []);
 
+  // Connection + balance — remount only on account / manual reconnect.
   useEffect(() => {
     if (!isConfigured) {
       setState("error");
@@ -80,9 +99,10 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
 
     let cancelled = false;
     const cleanups: Array<() => void> = [];
-    setTicks([]);
     setError(null);
     setState("authorizing");
+    setTicks([]);
+    setStreamSymbol(null);
 
     const credentials = accountCredentials(accountKind);
 
@@ -108,47 +128,80 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
         setAccount(resolved);
         setBalance(resolved.balance);
 
-        const client = new DerivClient({
+        const nextClient = new DerivClient({
           appId: config.appId,
           restUrl: config.restUrl,
           token: credentials.token,
           accountId: resolved.accountId,
         });
-        client.account = resolved;
-        clientRef.current = client;
-        setClient(client);
+        nextClient.account = resolved;
+        clientRef.current = nextClient;
+        setClient(nextClient);
 
-        cleanups.push(client.onStateChange(setState));
+        cleanups.push(nextClient.onStateChange(setState));
         cleanups.push(
-          client.onError((clientError) => {
+          nextClient.onError((clientError) => {
             if (!cancelled) setError(clientError.message);
           }),
         );
 
-        client.connect();
-        await waitForReady(client);
+        nextClient.connect();
+        await waitForReady(nextClient);
         if (cancelled) return;
 
-        // Subscribe once. The client restores these on reconnect — do not
-        // re-subscribe on every "ready" or Deriv returns AlreadySubscribed.
-        const stopBalance = await client.subscribe<BalanceResponse>({ balance: 1 }, (message) => {
-          if (cancelled) return;
-          setError(null);
-          setBalance(message.balance.balance);
-          setAccount((previous) =>
-            previous
-              ? {
-                  ...previous,
-                  balance: message.balance.balance,
-                  currency: message.balance.currency,
-                  accountId: message.balance.loginid || previous.accountId,
-                }
-              : previous,
-          );
-        });
+        const stopBalance = await nextClient.subscribe<BalanceResponse>(
+          { balance: 1 },
+          (message) => {
+            if (cancelled) return;
+            setError(null);
+            setBalance(message.balance.balance);
+            setAccount((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    balance: message.balance.balance,
+                    currency: message.balance.currency,
+                    accountId: message.balance.loginid || previous.accountId,
+                  }
+                : previous,
+            );
+          },
+        );
         cleanups.push(stopBalance);
+      } catch (connectError) {
+        if (cancelled) return;
+        setState("error");
+        setError(
+          connectError instanceof Error ? connectError.message : String(connectError),
+        );
+      }
+    })();
 
-        const stopTicks = await client.subscribe<HistoryResponse | TickResponse>(
+    return () => {
+      cancelled = true;
+      tickStopRef.current?.();
+      tickStopRef.current = null;
+      for (const cleanup of cleanups) cleanup();
+      clientRef.current?.disconnect();
+      clientRef.current = null;
+      setClient(null);
+    };
+  }, [attempt, accountKind]);
+
+  // Hot-swap tick stream when symbol (or history size) changes — keep socket.
+  useEffect(() => {
+    const active = clientRef.current;
+    if (!active || state !== "ready") return;
+
+    let cancelled = false;
+    setSwitching(true);
+
+    void (async () => {
+      tickStopRef.current?.();
+      tickStopRef.current = null;
+
+      try {
+        const stopTicks = await active.subscribe<HistoryResponse | TickResponse>(
           {
             ticks_history: symbol,
             adjust_start_time: 1,
@@ -157,7 +210,7 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
             style: "ticks",
           },
           (message) => {
-            if (cancelled) return;
+            if (cancelled || symbolRef.current !== symbol) return;
 
             if (message.msg_type === "history") {
               setError(null);
@@ -171,6 +224,8 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
                   digit: lastDigit(quote, pipSize),
                 })),
               );
+              setStreamSymbol(symbol);
+              setSwitching(false);
               return;
             }
 
@@ -185,27 +240,34 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
                   ...previous,
                   { epoch, quote, pipSize, digit: lastDigit(quote, pipSize) },
                 ];
-                return next.length > MAX_TICKS ? next.slice(next.length - MAX_TICKS) : next;
+                return next.length > MAX_TICKS
+                  ? next.slice(next.length - MAX_TICKS)
+                  : next;
               });
+              setStreamSymbol(symbol);
+              setSwitching(false);
             }
           },
         );
-        cleanups.push(stopTicks);
-      } catch (connectError) {
+
+        if (cancelled) {
+          stopTicks();
+          return;
+        }
+        tickStopRef.current = stopTicks;
+      } catch (subError) {
         if (cancelled) return;
-        setState("error");
-        setError(connectError instanceof Error ? connectError.message : String(connectError));
+        setSwitching(false);
+        setError(subError instanceof Error ? subError.message : String(subError));
       }
     })();
 
     return () => {
       cancelled = true;
-      for (const cleanup of cleanups) cleanup();
-      clientRef.current?.disconnect();
-      clientRef.current = null;
-      setClient(null);
+      tickStopRef.current?.();
+      tickStopRef.current = null;
     };
-  }, [symbol, historyCount, attempt, accountKind]);
+  }, [client, state, symbol, historyCount]);
 
   const digits = useMemo(() => ticks.map((tick) => tick.digit), [ticks]);
 
@@ -217,6 +279,8 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
     currency: account?.currency ?? "USD",
     ticks,
     digits,
+    streamSymbol,
+    switching,
     client,
     reconnect,
   };
