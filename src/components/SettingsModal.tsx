@@ -23,6 +23,11 @@ import { config, type AccountKind } from "../lib/config";
 import type { ConnectionState } from "../lib/deriv/types";
 import { listAccounts } from "../lib/deriv/rest";
 import type { OptionsAccount } from "../lib/deriv/types";
+import {
+  BOT_PROFILE_VERSION,
+  BOT_SETTINGS_VERSION,
+  botVersionLabel,
+} from "../lib/bot/version";
 import { SystemStatusPanel } from "./SystemStatusPanel";
 
 interface SettingsModalProps {
@@ -193,7 +198,12 @@ export function SettingsModal({
 
       <div className={`modal__card settings-modal ${tab === "status" ? "settings-modal--wide" : ""}`}>
         <header className="modal__head">
-          <h2>Settings</h2>
+          <div className="settings-modal__head-title">
+            <h2>Settings</h2>
+            <span className="settings-modal__version" title={botVersionLabel()}>
+              Bot v{BOT_SETTINGS_VERSION}
+            </span>
+          </div>
           <button type="button" className="modal__close" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -546,6 +556,13 @@ function TradingPanel({
 }) {
   return (
     <section className="modal__section settings-modal__section">
+      <div className="settings-bot-version" aria-label={botVersionLabel()}>
+        <strong>Bot version</strong>
+        <span>v{BOT_SETTINGS_VERSION}</span>
+        <em>Differs profile v{BOT_PROFILE_VERSION}</em>
+        <p>HIGH confidence only · firm digit · lock → confirm → skip 1st · fire fast</p>
+      </div>
+
       <h3>Deriv account</h3>
       <p className="modal__note">
         Switching reconnects the feed and reloads the balance. Trade history stays. Moving to{" "}

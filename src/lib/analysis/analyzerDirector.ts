@@ -1,10 +1,10 @@
 /**
  * Analyzer director — Digits decides; the trade desk only follows.
  *
- * Steady but fast: short Lock → short Confirm → Trade now. Market hops are
- * blocked while Confirming / Trade now so the feed cannot change mid-fire.
- * (Desk may intentionally skip the first Trade now after Start, then buy
- * the next cycle immediately while the market stays glued.)
+ * Only firm, steady digits in a steady market reach Trade now.
+ * Weak / soft / flipping colds are left alone. Once Trade now arms,
+ * the desk must buy that streak immediately (skip-first still applies
+ * after Start).
  */
 import {
   analyzerAllowsEntry,
@@ -13,26 +13,29 @@ import {
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
 
-/** Phase 1 — prove cold is real (~4s on 1s indices). */
-export const LOCK_TICKS = 4;
-export const LOCK_MS = 4_000;
+/** Phase 1 — prove the cold is firm and stable (~6s on 1s indices). */
+export const LOCK_TICKS = 6;
+export const LOCK_MS = 6_000;
 
-/** Phase 2 — quick anti-fade check, then arm buy immediately. */
+/** Phase 2 — brief anti-fade, then arm buy on the next ticks. */
 export const CONFIRM_TICKS = 2;
-export const CONFIRM_MS = 1_500;
+export const CONFIRM_MS = 1_000;
 
-/** @deprecated use LOCK_TICKS — kept for UI copy helpers */
+/** Differs must stay this cold while proving. Soft lukewarm = leave alone. */
+export const FIRM_COLD_MAX = 8.9;
+
+/** Composite power floor — below this the digit is not strong enough. */
+export const FIRM_POWER_MIN = 72;
+
+/** Gap air above minColdGap required for a steady market entry. */
+export const FIRM_GAP_AIR = 2;
+
+/** @deprecated */
 export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
-/** @deprecated use LOCK_MS + CONFIRM_MS */
+/** @deprecated */
 export const STEADY_MS = LOCK_MS + CONFIRM_MS;
 
-/** Dead tape — hop quickly and keep searching. */
 export const DEAD_MARKET_MS = 4_000;
-
-/**
- * Max time on one volatility without Confirming / Trade now.
- * Soft “almost” setups must not park the carousel.
- */
 export const MAX_MARKET_DWELL_MS = 14_000;
 
 type DeskSettings = Pick<
@@ -42,16 +45,15 @@ type DeskSettings = Pick<
 
 export interface AnalyzerHold {
   key: string;
-  /** Ticks in the current phase. */
   count: number;
   lastGap: number;
   digit: number;
   side: MarketSignal["side"];
-  /** When the current phase started. */
   sinceMs: number;
   phase: "lock" | "confirm";
-  /** When the overall lock started (for display). */
   lockSinceMs: number;
+  /** Lowest gap seen while proving — must stay firm. */
+  floorGap: number;
 }
 
 export interface AnalyzerDirective {
@@ -69,36 +71,97 @@ function holdKey(symbol: string, signal: MarketSignal): string {
 }
 
 function firmGapFloor(settings: DeskSettings, side: MarketSignal["side"]): number {
-  // +1 air is enough to reject soft flashes without waiting for a peak to die.
-  return side === "DIGITDIFF" ? settings.minColdGap + 1 : settings.minColdGap;
+  return side === "DIGITDIFF"
+    ? settings.minColdGap + FIRM_GAP_AIR
+    : settings.minColdGap;
 }
 
 /**
- * True only for a near-ready cold worth a short stay.
- * Warming / weak gaps return false so the carousel keeps hunting.
+ * Strong + firm digit in a steady market — otherwise leave it alone.
+ */
+export function firmSteadyCheck(
+  signal: MarketSignal,
+  settings: DeskSettings,
+): AnalyzerGateResult {
+  const base = analyzerAllowsEntry(signal, settings);
+  if (!base.ok) return base;
+
+  const gap = signal.watching.signalGap;
+  const firmGap = firmGapFloor(settings, signal.side);
+  const sideLabel = signal.side === "DIGITMATCH" ? "Matches" : "Differs";
+
+  if (!signal.primaryBarrier || !signal.barrierAligned) {
+    return {
+      ok: false,
+      reason: `Analyzer · ${signal.digit} not #1 ${signal.side === "DIGITDIFF" ? "cold" : "hot"} · leave alone`,
+    };
+  }
+  if (!signal.separationOk || !signal.coldMarginOk) {
+    return {
+      ok: false,
+      reason: `Analyzer · thin lead · leave alone`,
+    };
+  }
+  if (!signal.uniqueEvOk) {
+    return {
+      ok: false,
+      reason: `Analyzer · pack cold · not unique · leave alone`,
+    };
+  }
+  if (signal.confidence !== "high") {
+    return {
+      ok: false,
+      reason: `Analyzer · ${signal.confidence} confidence · need high · leave alone`,
+    };
+  }
+  if (signal.power < FIRM_POWER_MIN) {
+    return {
+      ok: false,
+      reason: `Analyzer · power ${signal.power}/${FIRM_POWER_MIN} · not strong`,
+    };
+  }
+  if (signal.side === "DIGITDIFF") {
+    if (gap === null || gap < firmGap) {
+      return {
+        ok: false,
+        reason: `Analyzer · gap ${gap ?? "—"}/${firmGap} · need steady air`,
+      };
+    }
+    if (signal.digitPercent > FIRM_COLD_MAX) {
+      return {
+        ok: false,
+        reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > ${FIRM_COLD_MAX}% · not firm`,
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    label: `${sideLabel} ${signal.digit} · firm · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · p${signal.power}`,
+  };
+}
+
+/**
+ * Near-firm only — soft almosts do not park the hunt forever.
  */
 export function isPromisingSetup(
   signal: MarketSignal,
   settings: DeskSettings,
 ): boolean {
-  if (analyzerAllowsEntry(signal, settings).ok) return true;
+  if (firmSteadyCheck(signal, settings).ok) return true;
   if (signal.side !== "DIGITDIFF" && settings.side === "DIGITDIFF") return false;
 
   const gap = signal.watching.signalGap ?? 0;
   const n = signal.watching.sampleSize;
-  // Warming feed — do not park; keep searching other volatilities.
-  if (n < 200) return false;
+  if (n < 300) return false;
   if (!signal.primaryBarrier || !signal.barrierAligned) return false;
-  if (signal.digitPercent > 9.2) return false;
-  // Near Good: gap almost at floor with firm cold.
-  if (gap >= settings.minColdGap - 1 && signal.digitPercent <= 9.1) return true;
-  if (gap >= 5 && signal.digitPercent <= 9.0 && n >= Math.min(400, settings.minSample)) {
-    return true;
-  }
+  if (!signal.separationOk || !signal.coldMarginOk) return false;
+  if (signal.digitPercent > 9.0) return false;
+  if (signal.power < 55) return false;
+  if (gap >= settings.minColdGap && signal.digitPercent <= 9.0) return true;
   return false;
 }
 
-/** Stay glued only while proving / firing a real entry. */
 export function shouldHoldMarket(
   hold: AnalyzerHold | null,
   buyNow: boolean,
@@ -107,8 +170,25 @@ export function shouldHoldMarket(
   if (buyNow) return true;
   if (!hold) return false;
   if (hold.phase === "confirm") return true;
-  // One clean lock attempt — if it keeps restarting, hunting resumes.
   return nowMs - hold.lockSinceMs < LOCK_MS + 1_500;
+}
+
+function watchResult(
+  digit: number,
+  side: MarketSignal["side"],
+  detail: string,
+  gate: AnalyzerGateResult,
+  label: "Watch" | "Almost" = "Almost",
+): AnalyzerDirective {
+  return {
+    gate,
+    buyNow: false,
+    hold: null,
+    label,
+    detail,
+    digit,
+    side,
+  };
 }
 
 function restartLock(
@@ -130,13 +210,14 @@ function restartLock(
     sinceMs: nowMs,
     phase: "lock",
     lockSinceMs: nowMs,
+    floorGap: gap,
   };
   return {
     gate,
     buyNow: false,
     hold,
     label: "Locking",
-    detail: `${sideLabel} ${digit} · ${why} · restart 1/${LOCK_TICKS} · gap ${gap}`,
+    detail: `${sideLabel} ${digit} · ${why} · 1/${LOCK_TICKS} · gap ${gap}`,
     digit,
     side,
   };
@@ -149,54 +230,21 @@ export function advanceAnalyzerDirector(
   settings: DeskSettings,
   nowMs: number = Date.now(),
 ): AnalyzerDirective {
-  const gate = analyzerAllowsEntry(signal, settings);
   const digit = signal.digit;
   const side = signal.side;
   const sideLabel = side === "DIGITMATCH" ? "Matches" : "Differs";
   const gap = signal.watching.signalGap ?? 0;
-  const firmGap = firmGapFloor(settings, side);
+  const firm = firmSteadyCheck(signal, settings);
 
-  if (!gate.ok) {
-    return {
-      gate,
-      buyNow: false,
-      hold: null,
-      label: "Watch",
-      detail: gate.reason.replace(/^Analyzer ·/, ""),
+  if (!firm.ok) {
+    const soft = analyzerAllowsEntry(signal, settings);
+    return watchResult(
       digit,
       side,
-    };
-  }
-
-  if (side === "DIGITDIFF" && gap < firmGap) {
-    return {
-      gate: {
-        ok: false,
-        reason: `Analyzer · gap ${gap}/${firmGap} · need steady air`,
-      },
-      buyNow: false,
-      hold: null,
-      label: "Almost",
-      detail: `${sideLabel} ${digit} · gap ${gap}/${firmGap} · holding for steady air`,
-      digit,
-      side,
-    };
-  }
-
-  // Firmer cold while proving — but 9.2 keeps real entries from dying mid-lock.
-  if (side === "DIGITDIFF" && signal.digitPercent > 9.2) {
-    return {
-      gate: {
-        ok: false,
-        reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.2% · not firm`,
-      },
-      buyNow: false,
-      hold: null,
-      label: "Almost",
-      detail: `${sideLabel} ${digit} · cold ${signal.digitPercent.toFixed(1)}% · need ≤9.2% for steady`,
-      digit,
-      side,
-    };
+      firm.reason.replace(/^Analyzer ·/, ""),
+      firm,
+      soft.ok ? "Almost" : "Watch",
+    );
   }
 
   const key = holdKey(symbol, signal);
@@ -209,13 +257,14 @@ export function advanceAnalyzerDirector(
       gap,
       nowMs,
       sideLabel,
-      gate,
-      "new cold",
+      firm,
+      "firm cold",
     );
   }
 
-  // Allow 1-tick gap noise; only real fades restart (missed the peak otherwise).
-  if (side === "DIGITDIFF" && gap < prev.lastGap - 1) {
+  // Real fade (2+ ticks of gap loss) or floor dropped under firm air → leave alone.
+  const firmGap = firmGapFloor(settings, side);
+  if (side === "DIGITDIFF" && (gap < firmGap || gap < prev.floorGap - 1)) {
     return restartLock(
       key,
       digit,
@@ -223,38 +272,38 @@ export function advanceAnalyzerDirector(
       gap,
       nowMs,
       sideLabel,
-      gate,
-      "gap faded",
+      firm,
+      "gap not steady",
     );
   }
 
   const heldMs = nowMs - prev.sinceMs;
   const count = prev.count + 1;
-  // Track peak gap so noise dips of 1 do not lower the floor forever.
+  const floorGap = Math.min(prev.floorGap, gap);
   const trackedGap = Math.max(gap, prev.lastGap);
 
-  // ── Phase 1: Locking ────────────────────────────────────────────────
+  // ── Phase 1: Locking — same firm digit, steady market ───────────────
   if (prev.phase === "lock") {
     const hold: AnalyzerHold = {
       ...prev,
       count,
       lastGap: trackedGap,
+      floorGap,
       sinceMs: prev.sinceMs,
       phase: "lock",
     };
     const locked = count >= LOCK_TICKS && heldMs >= LOCK_MS;
     if (!locked) {
       return {
-        gate,
+        gate: firm,
         buyNow: false,
         hold,
         label: "Locking",
-        detail: `${sideLabel} ${digit} · locking ${Math.min(count, LOCK_TICKS)}/${LOCK_TICKS} · ${Math.round(Math.min(heldMs, LOCK_MS) / 100) / 10}s/${Math.round(LOCK_MS / 1000)}s · gap ${gap}`,
+        detail: `${sideLabel} ${digit} · firm lock ${Math.min(count, LOCK_TICKS)}/${LOCK_TICKS} · ${Math.round(Math.min(heldMs, LOCK_MS) / 100) / 10}s · gap ${gap} · p${signal.power}`,
         digit,
         side,
       };
     }
-    // Enter confirm — do not buy on this tick.
     const confirmHold: AnalyzerHold = {
       key,
       count: 1,
@@ -264,34 +313,36 @@ export function advanceAnalyzerDirector(
       sinceMs: nowMs,
       phase: "confirm",
       lockSinceMs: prev.lockSinceMs,
+      floorGap,
     };
     return {
-      gate,
+      gate: firm,
       buyNow: false,
       hold: confirmHold,
       label: "Confirming",
-      detail: `${sideLabel} ${digit} · confirming 1/${CONFIRM_TICKS} · proving steady · gap ${gap}`,
+      detail: `${sideLabel} ${digit} · confirm 1/${CONFIRM_TICKS} · still firm · gap ${gap}`,
       digit,
       side,
     };
   }
 
-  // ── Phase 2: Confirming → Trade now (desk must fire this streak) ────
+  // ── Phase 2: Confirm → Trade now (desk fires this streak fast) ──────
   const hold: AnalyzerHold = {
     ...prev,
     count,
     lastGap: trackedGap,
+    floorGap,
     sinceMs: prev.sinceMs,
     phase: "confirm",
   };
   const confirmed = count >= CONFIRM_TICKS && heldMs >= CONFIRM_MS;
   if (!confirmed) {
     return {
-      gate,
+      gate: firm,
       buyNow: false,
       hold,
       label: "Confirming",
-      detail: `${sideLabel} ${digit} · confirming ${Math.min(count, CONFIRM_TICKS)}/${CONFIRM_TICKS} · ${Math.round(Math.min(heldMs, CONFIRM_MS) / 100) / 10}s/${Math.round(CONFIRM_MS / 1000)}s · gap ${gap}`,
+      detail: `${sideLabel} ${digit} · confirm ${Math.min(count, CONFIRM_TICKS)}/${CONFIRM_TICKS} · ${Math.round(Math.min(heldMs, CONFIRM_MS) / 100) / 10}s · gap ${gap}`,
       digit,
       side,
     };
@@ -300,11 +351,11 @@ export function advanceAnalyzerDirector(
   const pct = signal.digitPercent.toFixed(1);
   const totalSec = Math.round((nowMs - prev.lockSinceMs) / 1000);
   return {
-    gate,
+    gate: firm,
     buyNow: true,
     hold,
     label: "Trade now",
-    detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${settings.minColdGap} · cold ${pct}% · power ${signal.power} · steady ${totalSec}s`,
+    detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${firmGap} · cold ${pct}% · power ${signal.power} · firm ${totalSec}s`,
     digit,
     side,
   };
@@ -314,5 +365,5 @@ export function isAnalyzerCandidate(
   signal: MarketSignal,
   settings: DeskSettings,
 ): boolean {
-  return analyzerAllowsEntry(signal, settings).ok;
+  return firmSteadyCheck(signal, settings).ok;
 }

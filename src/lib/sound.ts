@@ -9,18 +9,69 @@
 import { storageKey } from "./platform";
 
 const STORAGE_KEY = storageKey("sound");
+const VOLUME_STORAGE_KEY = storageKey("sound-volume");
+
+export type SoundVolume = "low" | "medium" | "high";
+
+const VOLUME_GAIN: Record<SoundVolume, number> = {
+  low: 0.32,
+  medium: 0.62,
+  high: 1,
+};
+
+const settingsListeners = new Set<() => void>();
+
+function readEnabled(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  return localStorage.getItem(STORAGE_KEY) !== "off";
+}
+
+function readVolume(): SoundVolume {
+  if (typeof localStorage === "undefined") return "high";
+  const raw = localStorage.getItem(VOLUME_STORAGE_KEY);
+  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  return "high";
+}
 
 let context: AudioContext | null = null;
 let enabled = readEnabled();
+let volume = readVolume();
 let unlocked = false;
 /** Replay buffer for beeps that hit a suspended context. */
 let pendingPlay: (() => void) | null = null;
 /** HTMLAudio fallback primed during a user gesture (helps mobile / Pages). */
 let htmlBeep: HTMLAudioElement | null = null;
 
-function readEnabled(): boolean {
-  if (typeof localStorage === "undefined") return true;
-  return localStorage.getItem(STORAGE_KEY) !== "off";
+function notifySettings(): void {
+  for (const listener of settingsListeners) listener();
+}
+
+function volumeGain(): number {
+  return VOLUME_GAIN[volume];
+}
+
+export function subscribeSoundSettings(listener: () => void): () => void {
+  settingsListeners.add(listener);
+  return () => settingsListeners.delete(listener);
+}
+
+export function getSoundVolume(): SoundVolume {
+  return volume;
+}
+
+export function setSoundVolume(next: SoundVolume): void {
+  volume = next;
+  try {
+    localStorage.setItem(VOLUME_STORAGE_KEY, next);
+  } catch {
+    // ignore
+  }
+  syncHtmlBeepVolume();
+  notifySettings();
+}
+
+export function getSoundVolumeGain(): number {
+  return volumeGain();
 }
 
 export function isSoundEnabled(): boolean {
@@ -34,6 +85,7 @@ export function setSoundEnabled(next: boolean): void {
   } catch {
     // ignore
   }
+  notifySettings();
 }
 
 function getContext(): AudioContext | null {
@@ -90,11 +142,16 @@ function buildBeepDataUri(): string {
   return `data:audio/wav;base64,${btoa(binary)}`;
 }
 
+function syncHtmlBeepVolume(): void {
+  if (!htmlBeep) return;
+  htmlBeep.volume = Math.min(1, volumeGain());
+}
+
 function primeHtmlBeep(): void {
   if (typeof Audio === "undefined") return;
   try {
     htmlBeep ??= new Audio(buildBeepDataUri());
-    htmlBeep.volume = 1;
+    syncHtmlBeepVolume();
     // Play+pause during gesture so later play() is allowed on many mobiles.
     const p = htmlBeep.play();
     if (p && typeof p.then === "function") {
@@ -120,7 +177,7 @@ function playHtmlFallback(): boolean {
   if (!htmlBeep) return false;
   try {
     htmlBeep.currentTime = 0;
-    htmlBeep.volume = 1;
+    syncHtmlBeepVolume();
     void htmlBeep.play();
     return true;
   } catch {
@@ -145,18 +202,26 @@ function flushPending(): void {
  * Returns whether the audio context is running.
  */
 export function unlockAudio(): boolean {
-  setSoundEnabled(true);
-  enabled = true;
+  if (!enabled) {
+    enabled = true;
+    try {
+      localStorage.setItem(STORAGE_KEY, "on");
+    } catch {
+      // ignore
+    }
+  }
   const ctx = getContext();
   primeHtmlBeep();
   if (!ctx) {
     unlocked = playHtmlFallback();
     flushPending();
+    notifySettings();
     return unlocked;
   }
   const finish = (ok: boolean) => {
     unlocked = ok;
     if (ok) flushPending();
+    notifySettings();
   };
   try {
     if (ctx.state === "suspended") {
@@ -185,8 +250,8 @@ export function unlockAudio(): boolean {
   } catch {
     finish(playHtmlFallback());
   }
-  // Optimistic — gesture path usually succeeds after resume settles.
   unlocked = true;
+  notifySettings();
   return true;
 }
 
@@ -198,13 +263,14 @@ function tone(
   gain: number,
   type: OscillatorType = "square",
 ): void {
+  const scaledGain = gain * volumeGain();
   const osc = ctx.createOscillator();
   const amp = ctx.createGain();
   osc.type = type;
   osc.frequency.setValueAtTime(frequency, startAt);
   amp.gain.setValueAtTime(0, startAt);
-  amp.gain.linearRampToValueAtTime(gain, startAt + 0.015);
-  amp.gain.linearRampToValueAtTime(gain * 0.75, startAt + duration * 0.5);
+  amp.gain.linearRampToValueAtTime(scaledGain, startAt + 0.015);
+  amp.gain.linearRampToValueAtTime(scaledGain * 0.75, startAt + duration * 0.5);
   amp.gain.linearRampToValueAtTime(0.0001, startAt + duration);
   osc.connect(amp).connect(ctx.destination);
   osc.start(startAt);

@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v16) — fast Lock → Confirm; skip 1st Trade now.
+ * Differs desk profile (v18) — HIGH confidence firm digit only.
  *
- * After Start, buy the next confirmed cycle. Market stays glued through
- * Confirm/Trade now so the executor does not buy a changed tape.
+ * Medium / soft / thin colds are left alone. After Start, skip 1st Trade
+ * now, then buy the next high-confidence firm cycle immediately.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 16;
+export const DIFFERS_FAST_PROFILE_VERSION = 18;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {
@@ -24,7 +24,7 @@ export const DIFFERS_FAST_GATES = {
   martingale: false,
   minSample: 500,
   minEdgePercent: 0,
-  skipLowConfidence: false,
+  skipLowConfidence: true,
   requireFullConfirm: false,
   requireMultiWindow: false,
   requireWindowsEv: false,

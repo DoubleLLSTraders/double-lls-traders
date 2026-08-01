@@ -58,6 +58,7 @@ import {
   liveSettingsForBalance,
   planLiveStake,
 } from "./lib/bot/liveProfile";
+import { BOT_SETTINGS_VERSION } from "./lib/bot/version";
 import { storageKey } from "./lib/platform";
 import { resumeAudioIfNeeded, unlockAudio } from "./lib/sound";
 import { config, isConfigured } from "./lib/config";
@@ -81,8 +82,6 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
  */
 const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
-/** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
-const BOT_SETTINGS_VERSION = 40;
 
 /** Volatility carousel — skip cheap-payout indices. */
 const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(

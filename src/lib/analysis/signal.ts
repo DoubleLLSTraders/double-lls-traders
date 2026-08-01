@@ -550,7 +550,7 @@ export function isArmedSignal(signal: MarketSignal, minPower = 70): boolean {
     signal.primaryBarrier &&
     signal.coldMarginOk &&
     signal.uniqueEvOk &&
-    (signal.confidence === "high" || signal.confidence === "medium") &&
+    signal.confidence === "high" &&
     signal.power >= minPower
   );
 }

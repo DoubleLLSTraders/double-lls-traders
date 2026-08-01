@@ -6,10 +6,7 @@ import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade"
 import type { MarketSignal } from "../lib/analysis/signal";
 import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
-import {
-  analyzerAllowsEntry,
-  isAnalyzerGood,
-} from "../lib/analysis/analyzerGate";
+import { isAnalyzerGood } from "../lib/analysis/analyzerGate";
 import { capStake, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
@@ -786,8 +783,8 @@ export function usePaperBot(options: {
         return;
       }
 
-      // Fire immediately on Digits Trade now — director already proved steady.
-      // Only reject hard fades / digit hops; do not re-wait for extra air.
+      // FAST FIRE — Digits already proved a firm steady digit. Buy this tick.
+      // Only abort if the digit hopped or the barrier just printed.
       if (analyzerBuyNowRef.current !== true) {
         setWaitReason("Follow · Trade now dropped · no buy");
         return;
@@ -801,31 +798,15 @@ export function usePaperBot(options: {
         );
         return;
       }
-      const stillGood = analyzerAllowsEntry(liveSignal, nextSettings);
-      if (!stillGood.ok) {
-        setWaitReason(
-          `Follow · Digits faded · ${stillGood.reason.replace(/^Analyzer ·/, "")}`,
-        );
-        setLog((lines) =>
-          pushLog(lines, `SKIP · faded Trade now · ${stillGood.reason}`),
-        );
-        return;
-      }
-      const liveGap = liveSignal.watching.signalGap;
-      if (
-        followSide === "DIGITDIFF" &&
-        (liveGap === null || liveGap < nextSettings.minColdGap)
-      ) {
-        setWaitReason(
-          `Follow · gap ${liveGap ?? "—"}/${nextSettings.minColdGap} · faded at wire`,
-        );
+      if (!liveSignal.primaryBarrier || !liveSignal.barrierAligned) {
+        setWaitReason(`Follow · ${followDigit} lost #1 · no buy`);
         return;
       }
 
       stuckSkipsRef.current = 0;
 
       setWaitReason(
-        `Opening · Digits Trade now · ${sideLabel} ${followDigit}`,
+        `Opening NOW · firm ${sideLabel} ${followDigit}`,
       );
 
       if (entriesBlocked()) {
