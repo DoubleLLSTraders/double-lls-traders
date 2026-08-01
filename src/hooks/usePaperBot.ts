@@ -806,14 +806,14 @@ export function usePaperBot(options: {
           }
           stuckSkipsRef.current += 1;
           // Bad / Almost tape — hop volatility quickly (don't sit on one index).
-          if (stuckSkipsRef.current >= 5) {
+          if (stuckSkipsRef.current >= 3) {
             stuckSkipsRef.current = 0;
             if (onSwitchMarketRef.current) {
-              setWaitReason("Market slow · searching next volatility…");
+              setWaitReason("Market slow · next volatility…");
               setLog((lines) =>
                 pushLog(lines, "ROTATE · bad market · next volatility"),
               );
-              onSwitchMarketRef.current("Bad market · searching next volatility…");
+              onSwitchMarketRef.current("Bad market · next volatility");
             } else {
               onStopRef.current("Deep · first setup never armed · stopped");
               setLog((lines) =>
@@ -865,14 +865,14 @@ export function usePaperBot(options: {
         } else {
           stuckSkipsRef.current = 0;
         }
-        if (stuckSkipsRef.current >= 5) {
+        if (stuckSkipsRef.current >= 3) {
           stuckSkipsRef.current = 0;
           if (onSwitchMarketRef.current) {
-            setWaitReason("Market slow · searching next volatility…");
+            setWaitReason("Market slow · next volatility…");
             setLog((lines) =>
               pushLog(lines, "ROTATE · bad market · next volatility"),
             );
-            onSwitchMarketRef.current("Bad market · searching next volatility…");
+            onSwitchMarketRef.current("Bad market · next volatility");
           } else {
             onStopRef.current("Deep · first setup never cleared · stopped");
             setLog((lines) =>

@@ -12,7 +12,9 @@ type DeskSettings = Pick<
 
 /**
  * Single source of truth for Digits “Good / Trade now” and bot buys.
- * Warming / Building / Almost must never reach an order.
+ *
+ * Desk Differs Good = #1 cold + gap + EV under 9.5%. Thin count-lead used to
+ * leave gap-12 setups on “Almost” forever while the bot sat on one index.
  */
 export function analyzerAllowsEntry(
   signal: MarketSignal,
@@ -62,21 +64,13 @@ export function analyzerAllowsEntry(
         reason: `Analyzer · gap ${gap ?? "—"}/${minGap} · not Good yet`,
       };
     }
-    if (!signal.coldMarginOk || !signal.separationOk) {
-      return {
-        ok: false,
-        reason: `Analyzer · cold lead thin (${signal.watching.separation || "—"})`,
-      };
-    }
-    if (!signal.structureOk) {
-      return { ok: false, reason: "Analyzer · structure not clear · no entry" };
-    }
     if (signal.digitPercent > 9.5) {
       return {
         ok: false,
         reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.5%`,
       };
     }
+    // Lead/margin soft — strong absence (gap) + EV + #1 cold is enough to trade.
   }
 
   const sideLabel = signal.side === "DIGITMATCH" ? "Matches" : "Differs";

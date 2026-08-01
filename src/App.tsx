@@ -4,7 +4,7 @@ import { AnalyzerPopup } from "./components/AnalyzerPopup";
 import { BotPanel, type BotSettings } from "./components/BotPanel";
 import { DigitBars } from "./components/DigitBars";
 import { DigitStrip } from "./components/DigitStrip";
-import { MarketSelect, volatilityTag } from "./components/MarketSelect";
+import { MARKETS, MarketSelect, volatilityTag } from "./components/MarketSelect";
 import { StatsPanel } from "./components/StatsPanel";
 import { BrandStamp } from "./components/BrandStamp";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -74,6 +74,17 @@ const BOT_SETTINGS_KEY = storageKey("bot-settings");
 /** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
 const BOT_SETTINGS_VERSION = 32;
 
+/** Volatility carousel — skip cheap-payout indices. */
+const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(
+  (m) => m.symbol,
+);
+
+function nextVolatilitySymbol(current: string): string {
+  const idx = VOL_CYCLE.indexOf(current as (typeof VOL_CYCLE)[number]);
+  if (idx < 0) return VOL_CYCLE[0] ?? "R_75";
+  return VOL_CYCLE[(idx + 1) % VOL_CYCLE.length] ?? VOL_CYCLE[0] ?? "R_75";
+}
+
 /** Wait for the feed to reload after switching volatility index. */
 async function waitForSymbolFeed(
   targetSymbol: string,
@@ -101,7 +112,7 @@ async function waitForSymbolFeed(
     ) {
       return true;
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
   }
   return false;
 }
@@ -461,66 +472,27 @@ export default function App() {
   );
 
   /**
-   * Mid-run switch after a loss or a stuck cold-gap wait.
-   *
-   * Analyzes every index first, only accepts a market that is already
-   * trade-ready, waits for the live feed to load, then re-checks the live
-   * signal. If nothing qualifies — or the live feed still looks bad — the
-   * run stops instead of jumping onto a blind pick.
+   * Fast volatility carousel — next index in ~1s (no 10-market scan that
+   * pinned the desk on V75 for half a minute).
    */
-  const switchToAnalyzedMarket = useCallback(
+  const hopNextVolatility = useCallback(
     async (reason: string) => {
-      if (!feed.client || feed.state !== "ready") {
-        setTimerNote(`${reason} · feed not ready · kept hunting here`);
-        return;
-      }
+      if (!feed.client || feed.state !== "ready") return;
       if (marketSwitchBusy.current) return;
       marketSwitchBusy.current = true;
       switchHoldRef.current = true;
-      setScanningMarket(true);
-      setTimerNote(`${reason} · analyzing all markets…`);
-
+      const next = nextVolatilitySymbol(symbol);
+      setTimerNote(`${reason} · ${volatilityTag(next)}`);
+      setSymbol(next);
       try {
-        // Always leave the current index so volatility keeps changing.
-        // Prefer a desk-ready setup, but still hop if none are armed yet.
-        const best = await findBestMarket(
-          feed.client,
-          scanBotSettings(),
-          symbol,
-          {
-            excludeSymbols: [symbol],
-            preferReady: true,
-          },
-        );
-
-        setTimerNote(
-          `Analyzed · ${best.name} · ${best.signal.label} · loading ticks…`,
-        );
-        setSymbol(best.symbol);
-        setBot((current) => ({
-          ...current,
-          side: current.autoSide ? best.signal.side : current.side,
-          prediction: best.signal.digit,
-          autoFollow: true,
-        }));
-
         const feedReady = await waitForSymbolFeed(
-          best.symbol,
-          Math.max(500, bot.minSample),
+          next,
+          80,
           () => feedSnapshotRef.current,
           () => botHaltRef.current,
-          20000,
+          10000,
         );
-
         if (botHaltRef.current) return;
-
-        if (!feedReady) {
-          setTimerNote(
-            `${best.name} · feed slow · still hunting on new volatility`,
-          );
-          return;
-        }
-
         const live = signalRef.current;
         setBot((current) => ({
           ...current,
@@ -536,27 +508,32 @@ export default function App() {
         });
         setTimerNote(
           deskReady
-            ? `Good · ${volatilityTag(best.symbol)} · ${live.label} · trading`
-            : `Live analyze · ${volatilityTag(best.symbol)} · ${live.label} · hunting`,
+            ? `Good · ${volatilityTag(next)} · ${live.label}`
+            : feedReady
+              ? `Analyze · ${volatilityTag(next)} · ${live.label}`
+              : `Analyze · ${volatilityTag(next)} · feed catching up`,
         );
-      } catch {
-        setTimerNote(`${reason} · market scan failed · kept hunting`);
       } finally {
         switchHoldRef.current = false;
-        setScanningMarket(false);
         marketSwitchBusy.current = false;
       }
     },
     [
       feed.client,
       feed.state,
-      scanBotSettings,
       symbol,
-      bot.minSample,
       bot.minColdGap,
+      bot.minSample,
       bot.maxMomentumGap,
       bot.side,
     ],
+  );
+
+  const switchToAnalyzedMarket = useCallback(
+    async (reason: string) => {
+      await hopNextVolatility(reason);
+    },
+    [hopNextVolatility],
   );
 
   const enterTradeFromSignal = useCallback(() => {
@@ -653,11 +630,13 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // Hunting: if Digits is not Good, leave this volatility fast and search.
+  // Efficient hunt: if not Good, carousel to the next volatility every ~3.5s.
+  // Works while hunting OR watching Market — never sits on one Almost tape.
   useEffect(() => {
-    if (!bot.running || scanningMarket || arm.arming) return;
+    if (scanningMarket || arm.arming) return;
     if (!feed.client || feed.state !== "ready") return;
     if (paper.session.open || paper.orderPending) return;
+    if (menu !== "market" && !bot.running) return;
 
     const good = isDeskTradeReady(signal, {
       minColdGap: bot.minColdGap,
@@ -670,11 +649,12 @@ export default function App() {
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current || switchHoldRef.current) return;
       if (paper.session.open || paper.orderPending) return;
-      void autoPickMarket("Bad / Almost · searching next volatility…", {
-        preferReady: true,
-        excludeCurrent: true,
-      });
-    }, 8000);
+      void hopNextVolatility(
+        bot.running
+          ? "Bad / Almost · next volatility"
+          : "Live analyze · next volatility",
+      );
+    }, 3500);
     return () => window.clearInterval(id);
   }, [
     bot.running,
@@ -682,7 +662,7 @@ export default function App() {
     arm.arming,
     feed.client,
     feed.state,
-    autoPickMarket,
+    hopNextVolatility,
     paper.session.open,
     paper.orderPending,
     signal,
@@ -690,6 +670,7 @@ export default function App() {
     bot.minSample,
     bot.maxMomentumGap,
     bot.side,
+    menu,
   ]);
 
   // Sound when Digits hits Almost or Good (once each per market).

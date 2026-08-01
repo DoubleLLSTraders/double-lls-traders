@@ -101,15 +101,17 @@ export function readMarketPulse(
 
   if (
     differs &&
+    differs.evOk &&
     differs.timingOk &&
     differs.barrierAligned &&
     differs.primaryBarrier &&
-    (signalGap ?? 0) >= minGap
+    (signalGap ?? 0) >= Math.max(3, minGap - 2) &&
+    (signalGap ?? 0) < minGap
   ) {
     return withNeed(
       "watch",
       "Almost",
-      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · ${differs.digitPercent.toFixed(1)}% · ${differs.evOk ? "EV ok" : "EV soft"}`,
+      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · ${differs.digitPercent.toFixed(1)}% · EV ok`,
     );
   }
 
