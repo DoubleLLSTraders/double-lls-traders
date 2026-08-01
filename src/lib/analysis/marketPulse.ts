@@ -25,7 +25,7 @@ export interface MarketPulse {
 
 export function formatPulseNeed(req: PulseRequirements): string {
   const vol = req.volatilityLabel ? ` · ${req.volatilityLabel}` : "";
-  return `Good needs HIGH confidence · firm digit · gap≥${req.minColdGap}+2 · cold≤8.9% · power≥72 · lock ~6s · confirm ~1s · skip 1st then fire${vol}`;
+  return `HIGH · gap≥${req.minColdGap}+1 · cold≤9.1% · p≥60 · lock~4s · skip 1st${vol}`;
 }
 
 /**

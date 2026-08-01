@@ -113,6 +113,72 @@ export function DigitBars({
   }, [basePulse, director, requirements, signal]);
   const alertKeyRef = useRef("");
   const symbolAlertRef = useRef(symbol);
+  const huntStartRef = useRef(Date.now());
+  const wasTradeNowRef = useRef(false);
+  const [waitMs, setWaitMs] = useState(0);
+  const [lastConfirmLabel, setLastConfirmLabel] = useState<string | null>(null);
+
+  // Confirm / hunt timer on Digits.
+  useEffect(() => {
+    huntStartRef.current = Date.now();
+    wasTradeNowRef.current = false;
+    setWaitMs(0);
+    setLastConfirmLabel(null);
+  }, [symbol]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const tradeNow =
+        pulse.label === "Trade now" || director?.buyNow === true;
+      if (tradeNow) {
+        if (!wasTradeNowRef.current) {
+          const ms = Date.now() - huntStartRef.current;
+          const totalSec = Math.max(0, Math.round(ms / 1000));
+          const m = Math.floor(totalSec / 60);
+          const s = totalSec % 60;
+          setLastConfirmLabel(
+            `✓ ${m}:${s.toString().padStart(2, "0")}`,
+          );
+          wasTradeNowRef.current = true;
+        }
+        return;
+      }
+      if (wasTradeNowRef.current) {
+        // New hunt after Trade now clears.
+        wasTradeNowRef.current = false;
+        huntStartRef.current = Date.now();
+      }
+      const lockSince = director?.hold?.lockSinceMs;
+      if (
+        lockSince &&
+        (director?.label === "Locking" || director?.label === "Confirming")
+      ) {
+        setWaitMs(Date.now() - huntStartRef.current);
+        return;
+      }
+      setWaitMs(Date.now() - huntStartRef.current);
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [pulse.label, director?.buyNow, director?.label, director?.hold?.lockSinceMs]);
+
+  const timerText = useMemo(() => {
+    const totalSec = Math.max(0, Math.floor(waitMs / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    const clock = `${m}:${s.toString().padStart(2, "0")}`;
+    if (pulse.label === "Trade now" || director?.buyNow) {
+      return lastConfirmLabel ?? `✓ ${clock}`;
+    }
+    if (director?.label === "Locking") return `Lock ${clock}`;
+    if (director?.label === "Confirming") return `Confirm ${clock}`;
+    return `Wait ${clock}`;
+  }, [
+    waitMs,
+    lastConfirmLabel,
+    pulse.label,
+    director?.buyNow,
+    director?.label,
+  ]);
 
   // Sound only when Digits shows Trade now (desk may buy).
   useEffect(() => {
@@ -260,8 +326,18 @@ export function DigitBars({
         <div className="digit-map__pulse-main">
           <span className="digit-map__pulse-dot" aria-hidden="true" />
           <strong>{pulse.label}</strong>
-          <em>{pulse.detail}</em>
           <SoundControlButton className="digit-map__alert-btn" />
+          <em>{pulse.detail}</em>
+          <span className="digit-map__timer" title="Time waiting / to confirm">
+            {timerText}
+          </span>
+          {lastConfirmLabel &&
+          pulse.label !== "Trade now" &&
+          !director?.buyNow ? (
+            <span className="digit-map__timer-last" title="Last confirm time">
+              Last {lastConfirmLabel}
+            </span>
+          ) : null}
         </div>
         <div className="digit-map__legend">
           <span className="is-high">Hot</span>

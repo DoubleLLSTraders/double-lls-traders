@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v18) — HIGH confidence firm digit only.
+ * Differs desk profile (v19) — HIGH confidence; stay on building colds.
  *
- * Medium / soft / thin colds are left alone. After Start, skip 1st Trade
- * now, then buy the next high-confidence firm cycle immediately.
+ * Medium / soft left alone. Hunt parks while a #1 cold gap grows so HIGH
+ * can form in minutes, not never. Skip 1st Trade now, then fire fast.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 18;
+export const DIFFERS_FAST_PROFILE_VERSION = 19;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {

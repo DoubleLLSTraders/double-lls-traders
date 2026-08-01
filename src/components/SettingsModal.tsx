@@ -560,7 +560,7 @@ function TradingPanel({
         <strong>Bot version</strong>
         <span>v{BOT_SETTINGS_VERSION}</span>
         <em>Differs profile v{BOT_PROFILE_VERSION}</em>
-        <p>HIGH confidence only · firm digit · lock → confirm → skip 1st · fire fast</p>
+        <p>HIGH only · stay on building cold · lock → confirm → skip 1st · fire fast</p>
       </div>
 
       <h3>Deriv account</h3>

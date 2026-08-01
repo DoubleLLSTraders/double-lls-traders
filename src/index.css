@@ -2396,10 +2396,41 @@ html[data-theme="light"] .digit-tile__tip {
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas:
     "dot label sound"
-    "dot detail detail";
+    "dot detail detail"
+    "dot timer last";
   align-items: center;
-  gap: 6px 8px;
+  gap: 5px 8px;
   margin-bottom: 8px;
+}
+
+.digit-map__timer {
+  grid-area: timer;
+  justify-self: start;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-faint);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  white-space: nowrap;
+}
+
+.digit-map__timer-last {
+  grid-area: last;
+  justify-self: end;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--digit-high) 75%, var(--muted));
+  white-space: nowrap;
+}
+
+.digit-map__pulse--good .digit-map__timer {
+  color: var(--digit-high);
+  border-color: color-mix(in srgb, var(--digit-high) 40%, var(--line-faint));
 }
 
 .digit-map__pulse-dot {
@@ -2420,6 +2451,10 @@ html[data-theme="light"] .digit-tile__tip {
   font-weight: 750;
   letter-spacing: -0.02em;
   color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .digit-map__pulse-main em {
@@ -3574,6 +3609,92 @@ html[data-theme="light"] .tick-chart__frame {
   min-height: 0;
   cursor: crosshair;
   touch-action: none;
+}
+
+.tick-chart__line,
+.tick-chart__area {
+  vector-effect: non-scaling-stroke;
+}
+
+.tick-chart__tip-dot,
+.tick-chart__tip-ring {
+  transition: cx 0.18s ease-out, cy 0.18s ease-out;
+}
+
+.tick-chart__result {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  pointer-events: none;
+  animation: chart-result-pop 3.4s ease-out both;
+}
+
+.tick-chart__result strong {
+  font-family: var(--font-display);
+  font-size: clamp(64px, 12vw, 120px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 0.95;
+  text-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+}
+
+.tick-chart__result em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: clamp(22px, 4vw, 36px);
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.tick-chart__result--win {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--digit-high) 28%, transparent) 0%,
+    transparent 62%
+  );
+}
+
+.tick-chart__result--win strong,
+.tick-chart__result--win em {
+  color: var(--digit-high);
+}
+
+.tick-chart__result--loss {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--hot, #ff4d4d) 26%, transparent) 0%,
+    transparent 62%
+  );
+}
+
+.tick-chart__result--loss strong,
+.tick-chart__result--loss em {
+  color: var(--hot, #ff4d4d);
+}
+
+@keyframes chart-result-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  22% {
+    transform: scale(1);
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
 }
 
 .tick-chart__hit {

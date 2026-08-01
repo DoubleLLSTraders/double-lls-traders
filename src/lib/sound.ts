@@ -319,13 +319,33 @@ async function withAudio(
   }
 }
 
-/** Cash-register win. */
+/** Big celebratory win fanfare — loud and hard to miss. */
 export function playWinSound(): void {
   void withAudio((ctx, now) => {
-    tone(ctx, 1046, now, 0.2, 0.45, "sine");
-    tone(ctx, 1568, now + 0.12, 0.45, 0.5, "sine");
-    tone(ctx, 2093, now + 0.12, 0.35, 0.3, "sine");
+    // Rising hit
+    tone(ctx, 523, now, 0.12, 0.78, "square");
+    tone(ctx, 659, now + 0.1, 0.12, 0.82, "square");
+    tone(ctx, 784, now + 0.2, 0.14, 0.88, "square");
+    // Peak chord
+    tone(ctx, 1046, now + 0.34, 0.42, 0.95, "square");
+    tone(ctx, 1318, now + 0.34, 0.48, 0.62, "sine");
+    tone(ctx, 1568, now + 0.58, 0.55, 0.92, "square");
+    tone(ctx, 2093, now + 0.58, 0.6, 0.55, "sine");
+    // Victory reprise
+    tone(ctx, 1175, now + 1.05, 0.16, 0.8, "square");
+    tone(ctx, 1568, now + 1.2, 0.22, 0.88, "square");
+    tone(ctx, 2093, now + 1.38, 0.65, 0.95, "square");
+    tone(ctx, 2637, now + 1.38, 0.7, 0.5, "sine");
+  }).then((ok) => {
+    if (!ok) playHtmlFallback();
   });
+  try {
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      navigator.vibrate([60, 40, 80, 40, 120, 50, 180]);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 /** Digits Good / Trade now — loud triple beep, hard to miss. */
@@ -357,12 +377,22 @@ export function playAlmostSetupSound(): void {
   });
 }
 
-/** Loss thud. */
+/** Loss thud — clear and firm. */
 export function playLossSound(): void {
   void withAudio((ctx, now) => {
-    tone(ctx, 220, now, 0.35, 0.55, "triangle");
-    tone(ctx, 110, now + 0.05, 0.4, 0.45, "sine");
+    tone(ctx, 196, now, 0.28, 0.75, "triangle");
+    tone(ctx, 130, now + 0.08, 0.45, 0.7, "sine");
+    tone(ctx, 98, now + 0.2, 0.55, 0.65, "triangle");
+  }).then((ok) => {
+    if (!ok) playHtmlFallback();
   });
+  try {
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      navigator.vibrate([140, 60, 200]);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export function isAudioUnlocked(): boolean {

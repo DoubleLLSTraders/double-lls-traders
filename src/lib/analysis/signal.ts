@@ -421,13 +421,19 @@ export function buildMarketSignal(
       ? signalGap >= minColdGap
       : signalGap <= Math.max(0, maxMomentumGap - 1));
   const sampleElite = stats.sampleSize >= minSampleForHigh;
+  // HIGH = desk-ready #1 cold with gap + lead. uniqueEv is preferred but a
+  // deep firm cold at min gap still qualifies (otherwise HIGH never appears).
+  const firmColdHigh =
+    preferredSide === "DIGITDIFF" &&
+    digitPercent <= 9.1 &&
+    (signalGap ?? 0) >= minColdGap;
   const highArmed =
     deskConfirm &&
     coldMarginOk &&
     separationOk &&
-    uniqueEvOk &&
     gapStrong &&
-    sampleElite;
+    sampleElite &&
+    (uniqueEvOk || firmColdHigh);
 
   const confidence: MarketSignal["confidence"] = highArmed
     ? "high"

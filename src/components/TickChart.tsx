@@ -9,8 +9,14 @@ interface TickChartProps {
   maxPoints?: number;
   /** True while the live stream is swapping markets (ticks stay until replace). */
   syncing?: boolean;
-  /** Settled trades to mark on the chart (epoch → win/loss). */
+  /** Settled trades to mark on the chart (newest first). */
   tradeMarkers?: Array<{ epoch: number; won: boolean; pnl?: number }>;
+}
+
+interface ResultFlash {
+  key: string;
+  won: boolean;
+  pnl?: number;
 }
 
 const WINDOW_OPTIONS = [50, 100, 150, 200] as const;
@@ -45,6 +51,27 @@ function formatChange(abs: number, pct: number, pip: number): string {
   return `${sign}${Math.abs(abs).toFixed(pip)} (${Math.abs(pct).toFixed(2)}%)`;
 }
 
+/** Catmull-Rom → cubic Bézier — Deriv-like smooth tape, not jagged steps. */
+function smoothLinePath(points: Array<{ x: number; y: number }>): string {
+  if (points.length < 2) return "";
+  if (points.length === 2) {
+    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+  }
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? p2;
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
+
 export function TickChart({
   ticks,
   symbol,
@@ -56,10 +83,44 @@ export function TickChart({
   const gradId = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
+  /** Hold Y scale so the tape does not jump every tick. */
+  const yScaleRef = useRef<{ min: number; max: number; symbol: string } | null>(
+    null,
+  );
+  const quoteAnimRef = useRef<number | null>(null);
   const [windowSize, setWindowSize] = useState(maxPoints);
   const [frameSize, setFrameSize] = useState({ width: 1200, height: 420 });
   const [hover, setHover] = useState<HoverState | null>(null);
+  const [smoothQuote, setSmoothQuote] = useState<number | null>(null);
+  const [resultFlash, setResultFlash] = useState<ResultFlash | null>(null);
+  const seenSettleRef = useRef<string | null>(null);
   const series = ticks.slice(-windowSize);
+
+  useEffect(() => {
+    yScaleRef.current = null;
+    quoteAnimRef.current = null;
+    setSmoothQuote(null);
+    setResultFlash(null);
+  }, [symbol]);
+
+  // Big WIN / LOSS pop on the chart when a trade settles.
+  useEffect(() => {
+    const newest = tradeMarkers[0];
+    if (!newest) return;
+    const key = `${newest.epoch}|${newest.won ? "W" : "L"}|${newest.pnl ?? ""}`;
+    if (seenSettleRef.current === key) return;
+    // Skip the first mount flood of old journal rows — only flash live settles.
+    if (seenSettleRef.current === null && tradeMarkers.length > 1) {
+      seenSettleRef.current = key;
+      return;
+    }
+    seenSettleRef.current = key;
+    setResultFlash({ key, won: newest.won, pnl: newest.pnl });
+    const timer = window.setTimeout(() => {
+      setResultFlash((current) => (current?.key === key ? null : current));
+    }, 3400);
+    return () => window.clearTimeout(timer);
+  }, [tradeMarkers]);
 
   useEffect(() => {
     const node = frameRef.current;
@@ -117,9 +178,27 @@ export function TickChart({
     const quotes = series.map((tick) => tick.quote);
     const rawMin = Math.min(...quotes);
     const rawMax = Math.max(...quotes);
-    const padY = (rawMax - rawMin || rawMax * 0.001) * 0.08;
-    const min = rawMin - padY;
-    const max = rawMax + padY;
+    const dataSpan = rawMax - rawMin || Math.max(rawMax * 0.0002, 0.01);
+    const padY = dataSpan * 0.12;
+    let min = rawMin - padY;
+    let max = rawMax + padY;
+    const held = yScaleRef.current;
+    if (held && held.symbol === symbol) {
+      const band = (held.max - held.min) * 0.1;
+      // Keep scale while price stays inside the band — kills vertical jumps.
+      if (rawMin >= held.min + band && rawMax <= held.max - band) {
+        min = held.min;
+        max = held.max;
+      } else {
+        min = Math.min(held.min, min);
+        max = Math.max(held.max, max);
+        // If scale blew out after a spike, ease back toward live range.
+        if (max - min > dataSpan * 4) {
+          min = rawMin - padY * 1.4;
+          max = rawMax + padY * 1.4;
+        }
+      }
+    }
     const span = max - min || 1;
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
@@ -139,9 +218,7 @@ export function TickChart({
       };
     });
 
-    const path = points
-      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
-      .join(" ");
+    const path = smoothLinePath(points);
     const last = points[points.length - 1];
     const area = `${path} L ${last.x} ${plotBottom} L ${points[0].x} ${plotBottom} Z`;
 
@@ -189,7 +266,16 @@ export function TickChart({
       plotTop: pad.top,
       plotLeft: pad.left,
     };
-  }, [series, tradeMarkers, frameSize]);
+  }, [series, tradeMarkers, frameSize, symbol]);
+
+  useEffect(() => {
+    if (series.length < 2) return;
+    yScaleRef.current = {
+      min: chart.min,
+      max: chart.max,
+      symbol,
+    };
+  }, [chart.min, chart.max, symbol, series.length]);
 
   const latest = series[series.length - 1];
   const first = series[0];
@@ -206,6 +292,31 @@ export function TickChart({
   const pip = latest?.pipSize ?? 2;
   const name = marketLabel(symbol);
 
+  // Ease the headline price between ticks (Deriv-style, not hard snaps).
+  useEffect(() => {
+    if (!latest) return;
+    const to = latest.quote;
+    const from = quoteAnimRef.current ?? to;
+    if (Math.abs(to - from) < 1e-12) {
+      quoteAnimRef.current = to;
+      setSmoothQuote(to);
+      return;
+    }
+    let raf = 0;
+    const start = performance.now();
+    const dur = 220;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / dur);
+      const eased = 1 - (1 - t) * (1 - t);
+      const value = from + (to - from) * eased;
+      quoteAnimRef.current = value;
+      setSmoothQuote(value);
+      if (t < 1) raf = window.requestAnimationFrame(step);
+    };
+    raf = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(raf);
+  }, [latest?.epoch, latest?.quote]);
+
   const lineColor =
     theme === "light"
       ? changeUp
@@ -217,13 +328,19 @@ export function TickChart({
   const badgeColor = theme === "light" ? "var(--chart-badge)" : lineColor;
   const badgeText = "var(--chart-badge-text)";
 
-  const display = hover?.point ?? (latest
+  const display = hover?.point
     ? {
-        quote: latest.quote,
-        epoch: latest.epoch,
-        digit: latest.digit,
+        quote: hover.point.quote,
+        epoch: hover.point.epoch,
+        digit: hover.point.digit,
       }
-    : null);
+    : latest
+      ? {
+          quote: smoothQuote ?? latest.quote,
+          epoch: latest.epoch,
+          digit: latest.digit,
+        }
+      : null;
 
   function nearestPoint(clientX: number, clientY: number): HoverState | null {
     const svg = svgRef.current;
@@ -427,8 +544,13 @@ export function TickChart({
                 stroke={lineColor}
               />
 
-              <path d={chart.area} fill={`url(#fill-${gradId})`} />
               <path
+                className="tick-chart__area"
+                d={chart.area}
+                fill={`url(#fill-${gradId})`}
+              />
+              <path
+                className="tick-chart__line"
                 d={chart.path}
                 fill="none"
                 stroke={lineColor}
@@ -437,8 +559,15 @@ export function TickChart({
                 strokeLinecap="round"
               />
 
-              <circle cx={chart.latestX} cy={chart.latestY} r="4.5" fill={lineColor} />
               <circle
+                className="tick-chart__tip-dot"
+                cx={chart.latestX}
+                cy={chart.latestY}
+                r="4.5"
+                fill={lineColor}
+              />
+              <circle
+                className="tick-chart__tip-ring"
                 cx={chart.latestX}
                 cy={chart.latestY}
                 r="8"
@@ -583,6 +712,25 @@ export function TickChart({
               )}
             </svg>
           )}
+
+          {resultFlash ? (
+            <div
+              key={resultFlash.key}
+              className={`tick-chart__result tick-chart__result--${
+                resultFlash.won ? "win" : "loss"
+              }`}
+              role="status"
+              aria-live="assertive"
+            >
+              <strong>{resultFlash.won ? "WIN" : "LOSS"}</strong>
+              {resultFlash.pnl !== undefined ? (
+                <em>
+                  {resultFlash.pnl >= 0 ? "+" : ""}
+                  {resultFlash.pnl.toFixed(2)}
+                </em>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="tick-chart__zoom">
             <button

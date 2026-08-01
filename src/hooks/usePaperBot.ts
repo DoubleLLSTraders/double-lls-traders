@@ -86,6 +86,15 @@ export function usePaperBot(options: {
   analyzerBuyNow?: boolean;
   analyzerDigit?: number;
   analyzerSide?: MarketSignal["side"];
+  /**
+   * Same-tick snap from App director advance — beats React state lag so the
+   * desk fires on the confirm tick, not the next frame / next tick.
+   */
+  analyzerSnapRef?: MutableRefObject<{
+    buyNow: boolean;
+    digit: number;
+    side: MarketSignal["side"];
+  }>;
   onSettings: (next: Partial<BotSettings>) => void;
   onStop: (reason: string) => void;
   /**
@@ -117,6 +126,7 @@ export function usePaperBot(options: {
     analyzerBuyNow = false,
     analyzerDigit,
     analyzerSide,
+    analyzerSnapRef,
     onSettings,
     onStop,
     onSwitchMarket,
@@ -172,9 +182,17 @@ export function usePaperBot(options: {
   const analyzerBuyNowRef = useRef(analyzerBuyNow);
   const analyzerDigitRef = useRef(analyzerDigit);
   const analyzerSideRef = useRef(analyzerSide);
-  analyzerBuyNowRef.current = analyzerBuyNow;
-  analyzerDigitRef.current = analyzerDigit;
-  analyzerSideRef.current = analyzerSide;
+  // Prefer same-tick director snap — props lag one commit after confirm.
+  const snap = analyzerSnapRef?.current;
+  if (snap) {
+    analyzerBuyNowRef.current = snap.buyNow;
+    analyzerDigitRef.current = snap.digit;
+    analyzerSideRef.current = snap.side;
+  } else {
+    analyzerBuyNowRef.current = analyzerBuyNow;
+    analyzerDigitRef.current = analyzerDigit;
+    analyzerSideRef.current = analyzerSide;
+  }
   /**
    * After Start: skip the first Digits Trade now streak, buy on the next.
    * Intentional sync — do not chase a signal that was already forming at Start.
@@ -777,29 +795,14 @@ export function usePaperBot(options: {
         onSwitchMarketRef.current?.("Low payout · next volatility");
         return;
       }
-      // Same tick the barrier prints — Digits drops Trade now; do not buy late.
-      if (followSide === "DIGITDIFF" && latest.digit === followDigit) {
-        setWaitReason(`Follow · Digits reset · ${followDigit} printed`);
-        return;
-      }
-
-      // FAST FIRE — Digits already proved a firm steady digit. Buy this tick.
-      // Only abort if the digit hopped or the barrier just printed.
+      // INSTANT FIRE — Digits confirmed; buy this same tick, no re-research.
       if (analyzerBuyNowRef.current !== true) {
         setWaitReason("Follow · Trade now dropped · no buy");
         return;
       }
-      if (
-        liveSignal.digit !== followDigit ||
-        liveSignal.side !== followSide
-      ) {
-        setWaitReason(
-          `Follow · Digits moved · ${sideLabel} ${followDigit} → ${liveSignal.digit}`,
-        );
-        return;
-      }
-      if (!liveSignal.primaryBarrier || !liveSignal.barrierAligned) {
-        setWaitReason(`Follow · ${followDigit} lost #1 · no buy`);
+      // Barrier just printed on this tick — contract would be dead on arrival.
+      if (followSide === "DIGITDIFF" && latest.digit === followDigit) {
+        setWaitReason(`Follow · Digits reset · ${followDigit} printed`);
         return;
       }
 

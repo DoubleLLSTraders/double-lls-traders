@@ -369,6 +369,12 @@ export default function App() {
   const [analyzerDirective, setAnalyzerDirective] =
     useState<AnalyzerDirective | null>(null);
   const analyzerBuyNowRef = useRef(false);
+  /** Synced in the same render as director advance — executor reads this, not lagged state. */
+  const analyzerSnapRef = useRef<{
+    buyNow: boolean;
+    digit: number;
+    side: ContractSide;
+  }>({ buyNow: false, digit: 0, side: "DIGITDIFF" });
   const latestTick = feed.ticks[feed.ticks.length - 1] ?? null;
   const deskGate = {
     minColdGap: bot.minColdGap,
@@ -392,6 +398,11 @@ export default function App() {
     );
     analyzerHoldRef.current = next.hold;
     analyzerBuyNowRef.current = next.buyNow;
+    analyzerSnapRef.current = {
+      buyNow: next.buyNow,
+      digit: next.digit,
+      side: next.side,
+    };
     // Glue market through Confirm → Trade now → buy. Do not hop mid-fire.
     if (next.buyNow) {
       tradeNowStayUntilRef.current = Date.now() + 15_000;
@@ -437,6 +448,11 @@ export default function App() {
     analyzerHoldRef.current = null;
     analyzerEpochRef.current = null;
     analyzerBuyNowRef.current = false;
+    analyzerSnapRef.current = {
+      buyNow: false,
+      digit: signal.digit,
+      side: signal.side,
+    };
     setAnalyzerDirective(null);
   }, [symbol]);
 
@@ -629,6 +645,11 @@ export default function App() {
       // Drop stalled lock so the next market starts clean.
       analyzerHoldRef.current = null;
       analyzerBuyNowRef.current = false;
+      analyzerSnapRef.current = {
+        buyNow: false,
+        digit: analyzerSnapRef.current.digit,
+        side: analyzerSnapRef.current.side,
+      };
       marketSwitchBusy.current = true;
       deadSinceRef.current = null;
       const next = nextVolatilitySymbol(symbolHopRef.current);
@@ -747,6 +768,7 @@ export default function App() {
     analyzerBuyNow: analyzerDirective?.buyNow ?? false,
     analyzerDigit: analyzerDirective?.digit ?? signal.digit,
     analyzerSide: analyzerDirective?.side ?? signal.side,
+    analyzerSnapRef,
     onSettings: (next) => setBot((current) => ({ ...current, ...next })),
     onStop: (reason) => {
       botHaltRef.current = true;
@@ -780,6 +802,11 @@ export default function App() {
     marketArriveRef.current = Date.now();
     analyzerHoldRef.current = null;
     analyzerBuyNowRef.current = false;
+    analyzerSnapRef.current = {
+      buyNow: false,
+      digit: analyzerSnapRef.current.digit,
+      side: analyzerSnapRef.current.side,
+    };
   }, [symbol]);
 
   useEffect(() => {

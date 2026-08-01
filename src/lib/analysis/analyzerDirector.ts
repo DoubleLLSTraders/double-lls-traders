@@ -13,22 +13,22 @@ import {
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
 
-/** Phase 1 — prove the cold is firm and stable (~6s on 1s indices). */
-export const LOCK_TICKS = 6;
-export const LOCK_MS = 6_000;
+/** Phase 1 — prove the cold is firm and stable (~4s on 1s indices). */
+export const LOCK_TICKS = 4;
+export const LOCK_MS = 4_000;
 
 /** Phase 2 — brief anti-fade, then arm buy on the next ticks. */
 export const CONFIRM_TICKS = 2;
 export const CONFIRM_MS = 1_000;
 
 /** Differs must stay this cold while proving. Soft lukewarm = leave alone. */
-export const FIRM_COLD_MAX = 8.9;
+export const FIRM_COLD_MAX = 9.1;
 
 /** Composite power floor — below this the digit is not strong enough. */
-export const FIRM_POWER_MIN = 72;
+export const FIRM_POWER_MIN = 60;
 
 /** Gap air above minColdGap required for a steady market entry. */
-export const FIRM_GAP_AIR = 2;
+export const FIRM_GAP_AIR = 1;
 
 /** @deprecated */
 export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
@@ -36,7 +36,8 @@ export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
 export const STEADY_MS = LOCK_MS + CONFIRM_MS;
 
 export const DEAD_MARKET_MS = 4_000;
-export const MAX_MARKET_DWELL_MS = 14_000;
+/** Dead tape rotates; building colds stay longer via isPromisingSetup. */
+export const MAX_MARKET_DWELL_MS = 40_000;
 
 type DeskSettings = Pick<
   BotSettings,
@@ -102,12 +103,6 @@ export function firmSteadyCheck(
       reason: `Analyzer · thin lead · leave alone`,
     };
   }
-  if (!signal.uniqueEvOk) {
-    return {
-      ok: false,
-      reason: `Analyzer · pack cold · not unique · leave alone`,
-    };
-  }
   if (signal.confidence !== "high") {
     return {
       ok: false,
@@ -142,7 +137,8 @@ export function firmSteadyCheck(
 }
 
 /**
- * Near-firm only — soft almosts do not park the hunt forever.
+ * Stay while a real cold is building — do not hop every few seconds and
+ * kill the gap before HIGH confidence can form.
  */
 export function isPromisingSetup(
   signal: MarketSignal,
@@ -153,12 +149,18 @@ export function isPromisingSetup(
 
   const gap = signal.watching.signalGap ?? 0;
   const n = signal.watching.sampleSize;
-  if (n < 300) return false;
+  if (n < 150) return false;
   if (!signal.primaryBarrier || !signal.barrierAligned) return false;
-  if (!signal.separationOk || !signal.coldMarginOk) return false;
-  if (signal.digitPercent > 9.0) return false;
-  if (signal.power < 55) return false;
-  if (gap >= settings.minColdGap && signal.digitPercent <= 9.0) return true;
+  if (signal.digitPercent > 9.2) return false;
+  // Gap growing on a firm-ish #1 cold — park and let it ripen to HIGH.
+  if (gap >= 2 && signal.digitPercent <= 9.2) return true;
+  if (
+    gap >= Math.max(3, settings.minColdGap - 2) &&
+    signal.digitPercent <= 9.1 &&
+    signal.power >= 40
+  ) {
+    return true;
+  }
   return false;
 }
 
