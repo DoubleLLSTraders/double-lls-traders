@@ -804,12 +804,21 @@ export function usePaperBot(options: {
             setLog((lines) => pushLog(lines, deep.reason));
           }
           stuckSkipsRef.current += 1;
-          if (stuckSkipsRef.current >= 80) {
+          // Rotate volatility instead of sitting on one dead tape.
+          if (stuckSkipsRef.current >= 12) {
             stuckSkipsRef.current = 0;
-            onStopRef.current("Deep · first setup never armed · stopped");
-            setLog((lines) =>
-              pushLog(lines, "STOPPED · first setup never armed · get out"),
-            );
+            if (onSwitchMarketRef.current) {
+              setWaitReason("Rotating volatility · fresh analyze…");
+              setLog((lines) =>
+                pushLog(lines, "ROTATE · hunting next volatility"),
+              );
+              onSwitchMarketRef.current("Hunting · rotating volatility…");
+            } else {
+              onStopRef.current("Deep · first setup never armed · stopped");
+              setLog((lines) =>
+                pushLog(lines, "STOPPED · first setup never armed · get out"),
+              );
+            }
           }
           return;
         }
@@ -857,12 +866,20 @@ export function usePaperBot(options: {
         } else {
           stuckSkipsRef.current = 0;
         }
-        if (stuckSkipsRef.current >= 40) {
+        if (stuckSkipsRef.current >= 12) {
           stuckSkipsRef.current = 0;
-          onStopRef.current("Deep · first setup never cleared · stopped");
-          setLog((lines) =>
-            pushLog(lines, "STOPPED · first setup never cleared · get out"),
-          );
+          if (onSwitchMarketRef.current) {
+            setWaitReason("Rotating volatility · fresh analyze…");
+            setLog((lines) =>
+              pushLog(lines, "ROTATE · hunting next volatility"),
+            );
+            onSwitchMarketRef.current("Hunting · rotating volatility…");
+          } else {
+            onStopRef.current("Deep · first setup never cleared · stopped");
+            setLog((lines) =>
+              pushLog(lines, "STOPPED · first setup never cleared · get out"),
+            );
+          }
           return;
         }
         return;

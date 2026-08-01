@@ -129,16 +129,17 @@ function clearsEvWithWilson(
   const n = stats.sampleSize;
   const pct = stats.percentages[digit] ?? 0;
   const breakEven = breakEvenDigitPercent(side, symbol);
-  const rawOk = clearsEv(side, pct, minEdgePercent, symbol);
-  if (!rawOk || n < 50) {
+  if (n < 50) {
     return { ok: false, boundLabel: "—" };
   }
 
-  // 90% Wilson (z≈1.64). Calibrated on live R_75: 95%/99% never cleared
-  // break-even on the coldest digit in 8k ticks — those bars looked "stronger"
-  // but armed 0 times. 90% is the strictest bound that still fires.
+  // 90% Wilson (z≈1.64) kept for Matches lower-bound / Differs label.
   const z = 1.64;
   if (side === "DIGITMATCH") {
+    const rawOk = clearsEv(side, pct, minEdgePercent, symbol);
+    if (!rawOk) {
+      return { ok: false, boundLabel: "—" };
+    }
     const { lower } = wilsonInterval(count, n, z);
     const lowerPct = lower * 100;
     const need = breakEven + minEdgePercent;
@@ -150,11 +151,15 @@ function clearsEvWithWilson(
 
   const { upper } = wilsonInterval(count, n, z);
   const upperPct = upper * 100;
-  const maxBarrier = breakEven - minEdgePercent;
-  const ok = pct <= maxBarrier && upperPct <= maxBarrier;
+  const payoutMax = breakEven - minEdgePercent;
+  // Strict payout BE is ~8.8%. At n=500 the coldest digit often sits 9.0–9.5%
+  // and Digits stayed on "Building · waiting EV" forever. Desk max 9.5% under
+  // fair 10%; gap + #1 cold carry selectivity. Wilson is label-only.
+  const deskMax = Math.max(payoutMax, 9.5 - minEdgePercent);
+  const ok = pct <= deskMax;
   return {
     ok,
-    boundLabel: `${pct.toFixed(1)}% · W↑ ${upperPct.toFixed(1)}% · max ${maxBarrier.toFixed(1)}%`,
+    boundLabel: `${pct.toFixed(1)}% · W↑ ${upperPct.toFixed(1)}% · max ${deskMax.toFixed(1)}%`,
   };
 }
 
@@ -329,12 +334,12 @@ export function buildMarketSignal(
     rival !== undefined &&
     clearsEvWithWilson(preferredSide, stats, rival, minEdge, options.symbol).ok;
   const uniqueEvOk = evOk && !rivalClears;
-  // Differs: χ² almost never rejects fair digits, so "structure" means a clear
-  // #1 cold barrier (lead + margin + primary + unique EV).
+  // Differs: #1 cold with lead + margin. Unique-EV is tracked separately —
+  // requiring it inside structure blocked almost every desk Good at n=500.
   // Matches still wants χ² heat plus a stable lead.
   const structureOk =
     preferredSide === "DIGITDIFF"
-      ? separationOk && coldMarginOk && barrierAligned && primaryBarrier && uniqueEvOk
+      ? separationOk && coldMarginOk && barrierAligned && primaryBarrier
       : stats.uniformity.significant && separationOk && primaryBarrier && uniqueEvOk;
 
   const watching = {

@@ -83,7 +83,6 @@ export function readMarketPulse(
     differs.timingOk &&
     differs.barrierAligned &&
     differs.primaryBarrier &&
-    differs.coldMarginOk &&
     sampleSize >= minSample &&
     (signalGap ?? 0) >= minGap;
 
@@ -99,15 +98,15 @@ export function readMarketPulse(
 
   if (
     differs &&
-    differs.evOk &&
     differs.timingOk &&
     differs.barrierAligned &&
-    (signalGap ?? 0) >= Math.max(3, minGap - 2)
+    differs.primaryBarrier &&
+    (signalGap ?? 0) >= minGap
   ) {
     return withNeed(
       "watch",
       "Almost",
-      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · ${differs.confidence} · power ${differs.power}`,
+      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · ${differs.digitPercent.toFixed(1)}% · ${differs.evOk ? "EV ok" : "EV soft"}`,
     );
   }
 
@@ -120,7 +119,7 @@ export function readMarketPulse(
     return withNeed(
       "watch",
       "Building",
-      `Differs ${differs.digit} · gap ${signalGap} · ${differs.confidence} · power ${differs.power} · waiting EV/confirms`,
+      `Differs ${differs.digit} · gap ${signalGap}/${minGap} · power ${differs.power}`,
     );
   }
 

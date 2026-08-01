@@ -465,9 +465,7 @@ export default function App() {
   const switchToAnalyzedMarket = useCallback(
     async (reason: string) => {
       if (!feed.client || feed.state !== "ready") {
-        botHaltRef.current = true;
-        setBot((current) => ({ ...current, running: false }));
-        setTimerNote(`${reason} · feed not ready · stopped`);
+        setTimerNote(`${reason} · feed not ready · kept hunting here`);
         return;
       }
       if (marketSwitchBusy.current) return;
@@ -477,24 +475,17 @@ export default function App() {
       setTimerNote(`${reason} · analyzing all markets…`);
 
       try {
+        // Always leave the current index so volatility keeps changing.
+        // Prefer a desk-ready setup, but still hop if none are armed yet.
         const best = await findBestMarket(
           feed.client,
           scanBotSettings(),
           symbol,
           {
             excludeSymbols: [symbol],
-            requireReady: true,
+            preferReady: true,
           },
         );
-
-        if (!best) {
-          botHaltRef.current = true;
-          setBot((current) => ({ ...current, running: false }));
-          setTimerNote(
-            `${reason} · no ready market · stopped (nothing cleared cold gap + barrier)`,
-          );
-          return;
-        }
 
         setTimerNote(
           `Analyzed · ${best.name} · ${best.signal.label} · loading ticks…`,
@@ -512,63 +503,52 @@ export default function App() {
           Math.max(500, bot.minSample),
           () => feedSnapshotRef.current,
           () => botHaltRef.current,
-          25000,
+          20000,
         );
 
         if (botHaltRef.current) return;
 
         if (!feedReady) {
-          botHaltRef.current = true;
-          setBot((current) => ({ ...current, running: false }));
           setTimerNote(
-            `${best.name} · feed did not load in time · stopped`,
+            `${best.name} · feed slow · still hunting on new volatility`,
           );
           return;
         }
 
-        // Re-read the live analyzer on the new feed. Scan history and the
-        // live stream can disagree by a few ticks — if the live setup is no
-        // longer ready, stop rather than trade blind.
         const live = signalRef.current;
-        const prefs = scanBotSettings().sidePreference;
-        const liveReady =
-          live.timingOk &&
-          live.barrierAligned &&
-          (prefs === "matches"
-            ? live.side === "DIGITMATCH"
-            : prefs === "differs" || prefs === "winrate"
-              ? live.side === "DIGITDIFF" && live.coldMarginOk
-              : true);
-
-        if (!liveReady) {
-          botHaltRef.current = true;
-          setBot((current) => ({ ...current, running: false }));
-          setTimerNote(
-            `${best.name} · live setup went cold after load · stopped`,
-          );
-          return;
-        }
-
         setBot((current) => ({
           ...current,
           side: current.autoSide ? live.side : current.side,
           prediction: live.digit,
           autoFollow: true,
         }));
+        const deskReady = isDeskTradeReady(live, {
+          minColdGap: bot.minColdGap,
+          minSample: bot.minSample,
+          side: bot.side,
+        });
         setTimerNote(
-          `Ready · ${best.name} · ${live.label} · trading resumes`,
+          deskReady
+            ? `Good · ${volatilityTag(best.symbol)} · ${live.label} · trading`
+            : `Live analyze · ${volatilityTag(best.symbol)} · ${live.label} · hunting`,
         );
       } catch {
-        botHaltRef.current = true;
-        setBot((current) => ({ ...current, running: false }));
-        setTimerNote(`${reason} · market scan failed · stopped`);
+        setTimerNote(`${reason} · market scan failed · kept hunting`);
       } finally {
         switchHoldRef.current = false;
         setScanningMarket(false);
         marketSwitchBusy.current = false;
       }
     },
-    [feed.client, feed.state, scanBotSettings, symbol, bot.minSample],
+    [
+      feed.client,
+      feed.state,
+      scanBotSettings,
+      symbol,
+      bot.minSample,
+      bot.minColdGap,
+      bot.side,
+    ],
   );
 
   const enterTradeFromSignal = useCallback(() => {
@@ -664,6 +644,31 @@ export default function App() {
     if (!feed.client || feed.state !== "ready") return;
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
+
+  // Live desk: keep analyzing a fresh volatility so Digits is not stuck on one
+  // index. Idle rotates every ~20s; while hunting the bot also rotates on skips.
+  useEffect(() => {
+    if (scanningMarket || arm.arming) return;
+    if (!feed.client || feed.state !== "ready") return;
+    const ms = bot.running ? 22000 : 18000;
+    const id = window.setInterval(() => {
+      if (marketSwitchBusy.current || switchHoldRef.current) return;
+      void autoPickMarket(
+        bot.running
+          ? "Live analyze · next volatility…"
+          : "Live analyze · scanning next volatility…",
+        { preferReady: true, excludeCurrent: true },
+      );
+    }, ms);
+    return () => window.clearInterval(id);
+  }, [
+    bot.running,
+    scanningMarket,
+    arm.arming,
+    feed.client,
+    feed.state,
+    autoPickMarket,
+  ]);
 
   const displayBalance =
     feed.balance === null

@@ -4,7 +4,7 @@
  * First entry follows the desk profile (settings): EV + timing + #1 cold.
  * Follow-ups stay strict and bank after one win.
  */
-import { breakEvenDigitPercent, isLowPayoutSymbol } from "./performance";
+import { isLowPayoutSymbol } from "./performance";
 import {
   confirmScore,
   isArmedSignal,
@@ -155,15 +155,11 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
 
   // First entry: desk profile — EV + timing + #1 cold is enough.
   if (firstEntry) {
-    const breakEven = breakEvenDigitPercent(signal.side, symbol);
-    if (signal.side === "DIGITDIFF") {
-      const cushion = breakEven - signal.digitPercent;
-      if (cushion < 0) {
-        return {
-          ok: false,
-          reason: `Deep · digit above break-even ${breakEven.toFixed(1)}% · get out`,
-        };
-      }
+    if (signal.side === "DIGITDIFF" && signal.digitPercent > 9.5) {
+      return {
+        ok: false,
+        reason: `Deep · cold ${signal.digitPercent.toFixed(1)}% > 9.5% desk max · get out`,
+      };
     }
     return {
       ok: true,
