@@ -72,11 +72,24 @@ export function DigitBars({
   const pulse = useMemo(() => {
     if (!director) return basePulse;
     if (director.buyNow) {
+      const sideLabel =
+        director.side === "DIGITMATCH" ? "Matches" : "Differs";
+      const vol = requirements?.volatilityLabel ?? "";
+      const gap = signal?.watching.signalGap ?? "—";
+      const minGap = requirements?.minColdGap ?? 6;
+      const pct =
+        signal?.digitPercent !== undefined
+          ? signal.digitPercent.toFixed(1)
+          : "—";
+      const power = signal?.power ?? "—";
+      const entry = `ENTRY ${sideLabel} ${director.digit}${
+        vol ? ` · ${vol}` : ""
+      } · gap ${gap}/${minGap} · cold ${pct}% · power ${power}`;
       return {
         ...basePulse,
         mood: "good" as const,
         label: "Trade now",
-        detail: director.detail,
+        detail: entry,
       };
     }
     if (director.label === "Locking" || director.label === "Almost") {
@@ -92,7 +105,7 @@ export function DigitBars({
       label: director.label === "Watch" ? basePulse.label : director.label,
       detail: director.detail || basePulse.detail,
     };
-  }, [basePulse, director]);
+  }, [basePulse, director, requirements, signal]);
   const alertKeyRef = useRef("");
   const symbolAlertRef = useRef(symbol);
 
@@ -155,7 +168,9 @@ export function DigitBars({
           const vsFair = pct - 10;
           const fill = Math.min(1, pct / Math.max(maxPct, 0.001));
           const dash = `${(fill * RING).toFixed(2)} ${RING.toFixed(2)}`;
-          const selected = selectedDigit === digit;
+          const entryDigit =
+            director?.buyNow === true ? director.digit : null;
+          const selected = selectedDigit === digit || entryDigit === digit;
           const live = latestDigit === digit;
           const pulsing = pulseDigit === digit;
           const hovering = hoverDigit === digit;
@@ -170,6 +185,7 @@ export function DigitBars({
               className={[
                 "digit-tile",
                 selected ? "digit-tile--selected" : "",
+                entryDigit === digit ? "digit-tile--entry" : "",
                 live ? "digit-tile--live" : "",
                 pulsing ? "digit-tile--pulse" : "",
                 hovering ? "digit-tile--hover" : "",

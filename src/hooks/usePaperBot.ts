@@ -6,7 +6,10 @@ import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade"
 import type { MarketSignal } from "../lib/analysis/signal";
 import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
-import { isAnalyzerGood } from "../lib/analysis/analyzerGate";
+import {
+  analyzerAllowsEntry,
+  isAnalyzerGood,
+} from "../lib/analysis/analyzerGate";
 import { capStake, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
@@ -512,6 +515,11 @@ export function usePaperBot(options: {
         mode: open.mode,
         contractId: open.contractId,
         note: open.note || tradeNoteRef.current || undefined,
+        entryAt: open.entryEpoch,
+        entrySpot: open.entrySpot,
+        entryGap: open.entryGap,
+        entryPercent: open.entryPercent,
+        entryPower: open.entryPower,
       };
 
       nextSession = {
@@ -778,10 +786,35 @@ export function usePaperBot(options: {
         return;
       }
 
+      // Fire-time re-check — reject faded / hopped / fake flashes.
+      if (analyzerBuyNowRef.current !== true) {
+        setWaitReason("Follow · Trade now dropped · no buy");
+        return;
+      }
+      if (
+        liveSignal.digit !== followDigit ||
+        liveSignal.side !== followSide
+      ) {
+        setWaitReason(
+          `Follow · Digits moved · ${sideLabel} ${followDigit} → ${liveSignal.digit}`,
+        );
+        return;
+      }
+      const stillGood = analyzerAllowsEntry(liveSignal, nextSettings);
+      if (!stillGood.ok) {
+        setWaitReason(
+          `Follow · Digits faded · ${stillGood.reason.replace(/^Analyzer ·/, "")}`,
+        );
+        setLog((lines) =>
+          pushLog(lines, `SKIP · faded Trade now · ${stillGood.reason}`),
+        );
+        return;
+      }
+
       stuckSkipsRef.current = 0;
 
       setWaitReason(
-        `Opening · Digits Trade now · ${followSide === "DIGITMATCH" ? "Matches" : "Differs"} ${followDigit}`,
+        `Opening · Digits Trade now · ${sideLabel} ${followDigit}`,
       );
 
       if (entriesBlocked()) {
@@ -805,6 +838,10 @@ export function usePaperBot(options: {
       const contracts = nextSettings.contracts;
       const duration = nextSettings.duration;
       const entryEpoch = latest.epoch;
+      const entrySpot = latest.quote;
+      const entryGap = liveSignal.watching.signalGap;
+      const entryPercent = liveSignal.digitPercent;
+      const entryPower = liveSignal.power;
 
       const applyOpen = (
         contractId?: number,
@@ -832,6 +869,10 @@ export function usePaperBot(options: {
             contractIds,
             payout,
             note: tradeNoteRef.current || undefined,
+            entrySpot,
+            entryGap,
+            entryPercent,
+            entryPower,
           };
           const updated: BotSession = {
             ...prev,

@@ -102,6 +102,16 @@ export interface TradeJournalEntry {
   mode: "paper" | "live";
   contractId?: number;
   note?: string;
+  /** Epoch when the order opened (settle time stays on `at`). */
+  entryAt?: number;
+  /** Spot quote at entry. */
+  entrySpot?: number;
+  /** Digits analyzer gap at entry. */
+  entryGap?: number | null;
+  /** Cold/hot % at entry. */
+  entryPercent?: number;
+  /** Analyzer power at entry. */
+  entryPower?: number;
 }
 
 export interface BotSession {
@@ -141,5 +151,9 @@ export interface BotSession {
     payout?: number;
     /** Copied to the journal on settle (e.g. AI Operator tag). */
     note?: string;
+    entrySpot?: number;
+    entryGap?: number | null;
+    entryPercent?: number;
+    entryPower?: number;
   };
 }

@@ -80,7 +80,7 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
 const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
 /** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
-const BOT_SETTINGS_VERSION = 36;
+const BOT_SETTINGS_VERSION = 37;
 
 /** Volatility carousel — skip cheap-payout indices. */
 const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(
@@ -376,6 +376,8 @@ export default function App() {
     side: bot.side,
   };
 
+  const tradeNowStayUntilRef = useRef(0);
+
   if (
     latestTick &&
     analyzerEpochRef.current !== latestTick.epoch
@@ -389,6 +391,15 @@ export default function App() {
     );
     analyzerHoldRef.current = next.hold;
     analyzerBuyNowRef.current = next.buyNow;
+    // Park on this market while Trade now is live — no hop mid-entry.
+    if (next.buyNow) {
+      tradeNowStayUntilRef.current = Date.now() + 8000;
+    } else if (next.hold && next.hold.count > 0) {
+      tradeNowStayUntilRef.current = Math.max(
+        tradeNowStayUntilRef.current,
+        Date.now() + 2000,
+      );
+    }
     setAnalyzerDirective(next);
   }
 
@@ -569,6 +580,10 @@ export default function App() {
       if (analyzerBuyNowRef.current || (analyzerHoldRef.current?.count ?? 0) > 0) {
         return;
       }
+      // Do not abandon a market that just locked / showed Trade now.
+      if (Date.now() < tradeNowStayUntilRef.current) {
+        return;
+      }
       if (
         isPromisingSetup(signalRef.current, {
           minColdGap: botGateRef.current.minColdGap,
@@ -737,7 +752,11 @@ export default function App() {
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current) return;
       if (paperBusyRef.current) return;
-      if (analyzerBuyNowRef.current || (analyzerHoldRef.current?.count ?? 0) > 0) {
+      if (
+        analyzerBuyNowRef.current ||
+        (analyzerHoldRef.current?.count ?? 0) > 0 ||
+        Date.now() < tradeNowStayUntilRef.current
+      ) {
         deadSinceRef.current = null;
         return;
       }
@@ -784,7 +803,7 @@ export default function App() {
     if (goodNoteRef.current === key) return;
     goodNoteRef.current = key;
     setTimerNote(
-      `Good to trade · ${volatilityTag(symbol)} · ${analyzerDirective.detail}`,
+      `Trade now · ${volatilityTag(symbol)} · ${analyzerDirective.detail}`,
     );
   }, [analyzerDirective?.buyNow, analyzerDirective?.digit, analyzerDirective?.detail, symbol]);
 

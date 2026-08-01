@@ -132,12 +132,25 @@ export async function downloadTradesPdf(
   // Running totals (newest first, same as UI)
   let running = summary.pnl;
   const body = trades.map((trade) => {
+    const side = trade.side === "DIGITMATCH" ? "Matches" : "Differs";
+    const entryBits = [
+      `${side} ${trade.digit}`,
+      trade.entryGap !== null && trade.entryGap !== undefined
+        ? `gap ${trade.entryGap}`
+        : null,
+      trade.entryPercent !== undefined
+        ? `${trade.entryPercent.toFixed(1)}%`
+        : null,
+      trade.entryPower !== undefined ? `pwr ${trade.entryPower}` : null,
+      trade.entrySpot !== undefined
+        ? `spot ${trade.entrySpot.toFixed(2)}`
+        : null,
+      trade.mode === "paper" ? "paper" : null,
+    ].filter(Boolean);
     const row = [
       clock(trade.at),
       trade.symbol ?? "—",
-      `${trade.side === "DIGITMATCH" ? "Matches" : "Differs"} ${trade.digit}${
-        trade.mode === "paper" ? " · paper" : ""
-      }`,
+      entryBits.join(" · "),
       `${trade.contracts} × ${trade.stake.toFixed(2)}`,
       trade.settleDigit === null ? "—" : `digit ${trade.settleDigit}`,
       trade.won ? "Profit" : "Loss",
@@ -155,7 +168,7 @@ export async function downloadTradesPdf(
       [
         "Time",
         "Market",
-        "Contract",
+        "Entry point",
         "Size",
         "Settled",
         "Result",
@@ -165,7 +178,7 @@ export async function downloadTradesPdf(
     ],
     body: body.length
       ? body
-      : [["—", "—", "—", "—", "—", "No trades", "—", "—"]],
+      : [["—", "—", "No trades", "—", "—", "—", "—", "—"]],
     styles: {
       font: "helvetica",
       fontSize: 7.5,
@@ -185,14 +198,14 @@ export async function downloadTradesPdf(
       fillColor: [248, 250, 252],
     },
     columnStyles: {
-      0: { cellWidth: 38 },
-      1: { cellWidth: 28 },
-      2: { cellWidth: 36 },
-      3: { cellWidth: 24 },
-      4: { cellWidth: 22 },
-      5: { cellWidth: 22 },
-      6: { cellWidth: 22, halign: "right" },
-      7: { cellWidth: 24, halign: "right" },
+      0: { cellWidth: 36 },
+      1: { cellWidth: 24 },
+      2: { cellWidth: 62 },
+      3: { cellWidth: 22 },
+      4: { cellWidth: 20 },
+      5: { cellWidth: 20 },
+      6: { cellWidth: 20, halign: "right" },
+      7: { cellWidth: 22, halign: "right" },
     },
     didParseCell(data) {
       if (data.section !== "body") return;

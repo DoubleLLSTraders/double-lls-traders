@@ -1,8 +1,9 @@
 /**
  * Analyzer director — Digits decides; the trade desk only follows.
  *
- * Stay on a market while a Differs cold is building. Only hop when the tape
- * is dead. When the gate clears, lock STEADY_TICKS then buyNow.
+ * Trade now is only armed after the same market+digit stays Good for
+ * STEADY_TICKS and STEADY_MS. Fleeting 1–2s flashes stay on Locking and
+ * must never reach the executor.
  */
 import {
   analyzerAllowsEntry,
@@ -11,8 +12,11 @@ import {
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
 
-/** 1 = Digits Trade now and desk buy on the same Good tick (no lag lock). */
-export const STEADY_TICKS = 1;
+/** Continuous Good ticks on the same digit before Trade now. */
+export const STEADY_TICKS = 5;
+
+/** Wall-clock hold so a burst of ticks cannot fake a lock. */
+export const STEADY_MS = 4500;
 
 /** How long a dead tape must sit before we rotate volatility. */
 export const DEAD_MARKET_MS = 9000;
@@ -28,6 +32,7 @@ export interface AnalyzerHold {
   lastGap: number;
   digit: number;
   side: MarketSignal["side"];
+  sinceMs: number;
 }
 
 export interface AnalyzerDirective {
@@ -45,8 +50,7 @@ function holdKey(symbol: string, signal: MarketSignal): string {
 }
 
 /**
- * True while Digits should stay put — building / almost / good / locking.
- * Hopping away here is what made Good never appear.
+ * True while Digits should stay put — building / almost / locking / Trade now.
  */
 export function isPromisingSetup(
   signal: MarketSignal,
@@ -57,11 +61,10 @@ export function isPromisingSetup(
 
   const gap = signal.watching.signalGap ?? 0;
   const n = signal.watching.sampleSize;
-  if (n < 80) return true; // feed still catching up after a hop — stay
+  if (n < 80) return true;
   if (n < Math.min(300, settings.minSample) && gap >= 2) return true;
   if (!signal.primaryBarrier || !signal.barrierAligned) return false;
   if (signal.digitPercent > 9.5) return false;
-  // Building a cold absence — give it time to reach minColdGap.
   if (gap >= 3 && signal.digitPercent <= 9.5) return true;
   if (signal.evOk && gap >= Math.max(2, settings.minColdGap - 3)) return true;
   return false;
@@ -72,6 +75,7 @@ export function advanceAnalyzerDirector(
   symbol: string,
   signal: MarketSignal,
   settings: DeskSettings,
+  nowMs: number = Date.now(),
 ): AnalyzerDirective {
   const gate = analyzerAllowsEntry(signal, settings);
   const digit = signal.digit;
@@ -93,25 +97,54 @@ export function advanceAnalyzerDirector(
   const key = holdKey(symbol, signal);
   const gap = signal.watching.signalGap ?? 0;
 
-  if (!prev || prev.key !== key) {
-    const hold: AnalyzerHold = { key, count: 1, lastGap: gap, digit, side };
+  // Need a little air under the gap so a print one tick later is less likely.
+  const firmGap =
+    side === "DIGITDIFF" ? settings.minColdGap + 1 : settings.minColdGap;
+  if (side === "DIGITDIFF" && gap < firmGap) {
     return {
-      gate,
-      buyNow: STEADY_TICKS <= 1,
-      hold,
-      label: STEADY_TICKS <= 1 ? "Trade now" : "Locking",
-      detail:
-        STEADY_TICKS <= 1
-          ? `${gate.label} · desk follows now`
-          : `${sideLabel} ${digit} · locking 1/${STEADY_TICKS} · gap ${gap}`,
+      gate: {
+        ok: false,
+        reason: `Analyzer · gap ${gap}/${firmGap} · need steady air`,
+      },
+      buyNow: false,
+      hold: null,
+      label: "Almost",
+      detail: `${sideLabel} ${digit} · gap ${gap}/${firmGap} · holding for steady air`,
       digit,
       side,
     };
   }
 
-  // Barrier printed / gap collapsed — restart lock, stay on market.
+  if (!prev || prev.key !== key) {
+    const hold: AnalyzerHold = {
+      key,
+      count: 1,
+      lastGap: gap,
+      digit,
+      side,
+      sinceMs: nowMs,
+    };
+    return {
+      gate,
+      buyNow: false,
+      hold,
+      label: "Locking",
+      detail: `${sideLabel} ${digit} · locking 1/${STEADY_TICKS} · ${Math.round(STEADY_MS / 1000)}s · gap ${gap}`,
+      digit,
+      side,
+    };
+  }
+
+  // Gap collapsed while locking — fake entry; restart (do not buy).
   if (side === "DIGITDIFF" && gap + 1 < prev.lastGap) {
-    const hold: AnalyzerHold = { key, count: 1, lastGap: gap, digit, side };
+    const hold: AnalyzerHold = {
+      key,
+      count: 1,
+      lastGap: gap,
+      digit,
+      side,
+      sinceMs: nowMs,
+    };
     return {
       gate,
       buyNow: false,
@@ -124,33 +157,38 @@ export function advanceAnalyzerDirector(
   }
 
   const count = prev.count + 1;
+  const heldMs = nowMs - prev.sinceMs;
   const hold: AnalyzerHold = {
     key,
     count,
     lastGap: Math.max(prev.lastGap, gap),
     digit,
     side,
+    sinceMs: prev.sinceMs,
   };
-  const buyNow = count >= STEADY_TICKS;
+  const buyNow = count >= STEADY_TICKS && heldMs >= STEADY_MS;
 
   if (!buyNow) {
+    const tickPart = Math.min(count, STEADY_TICKS);
+    const secPart = Math.min(STEADY_MS, heldMs);
     return {
       gate,
       buyNow: false,
       hold,
       label: "Locking",
-      detail: `${sideLabel} ${digit} · locking ${Math.min(count, STEADY_TICKS)}/${STEADY_TICKS} · gap ${gap}`,
+      detail: `${sideLabel} ${digit} · locking ${tickPart}/${STEADY_TICKS} · ${Math.round(secPart / 100) / 10}s/${Math.round(STEADY_MS / 1000)}s · gap ${gap}`,
       digit,
       side,
     };
   }
 
+  const pct = signal.digitPercent.toFixed(1);
   return {
     gate,
     buyNow: true,
     hold,
     label: "Trade now",
-    detail: `${gate.label} · steady · desk follows now`,
+    detail: `ENTRY ${sideLabel} ${digit} · gap ${gap}/${settings.minColdGap} · cold ${pct}% · power ${signal.power} · held ${STEADY_TICKS} ticks`,
     digit,
     side,
   };

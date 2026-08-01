@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v13) — Digits Trade now = instant desk buy.
+ * Differs desk profile (v14) — Trade now only after a steady lock.
  *
- * Executor is a pure follower (no re-back / deep research). Stay while
- * building; hop only after a dead dwell.
+ * Fleeting Good flashes stay Locking (~5 ticks / 4.5s). Executor follows
+ * only armed Trade now and re-checks at fire time.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 13;
+export const DIFFERS_FAST_PROFILE_VERSION = 14;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {

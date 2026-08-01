@@ -35,6 +35,30 @@ function money(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
+function entryPointLines(trade: StoredTrade): { title: string; meta: string } {
+  const side = trade.side === "DIGITMATCH" ? "Matches" : "Differs";
+  const title = `${side} ${trade.digit}`;
+  const parts: string[] = [];
+  if (trade.entryGap !== null && trade.entryGap !== undefined) {
+    parts.push(`gap ${trade.entryGap}`);
+  }
+  if (trade.entryPercent !== undefined) {
+    parts.push(`${trade.entryPercent.toFixed(1)}%`);
+  }
+  if (trade.entryPower !== undefined) {
+    parts.push(`pwr ${trade.entryPower}`);
+  }
+  if (trade.entrySpot !== undefined) {
+    parts.push(`spot ${trade.entrySpot.toFixed(2)}`);
+  }
+  if (trade.mode === "paper") parts.push("paper");
+  if (trade.note) parts.push(trade.note);
+  return {
+    title,
+    meta: parts.length > 0 ? parts.join(" · ") : "entry digit only",
+  };
+}
+
 export function TradesPanel({
   session,
   performance,
@@ -80,7 +104,7 @@ export function TradesPanel({
         <div>
           <h2>Trades</h2>
           <p>
-            Every settled basket, saved on this device · newest first
+            Every settled basket with entry point · newest first
           </p>
         </div>
         <div className="trades__head-right">
@@ -172,11 +196,24 @@ export function TradesPanel({
         <div className="trades__open">
           <span className="trades__badge trades__badge--open">Open</span>
           <b>
-            {open.side === "DIGITMATCH" ? "Matches" : "Differs"} {open.digit}
+            ENTRY {open.side === "DIGITMATCH" ? "Matches" : "Differs"}{" "}
+            {open.digit}
           </b>
           <span>
             {open.contracts} × {open.stake.toFixed(2)} {currency}
           </span>
+          {open.entryGap !== null && open.entryGap !== undefined ? (
+            <span>gap {open.entryGap}</span>
+          ) : null}
+          {open.entryPercent !== undefined ? (
+            <span>{open.entryPercent.toFixed(1)}%</span>
+          ) : null}
+          {open.entryPower !== undefined ? (
+            <span>pwr {open.entryPower}</span>
+          ) : null}
+          {open.entrySpot !== undefined ? (
+            <span>spot {open.entrySpot.toFixed(2)}</span>
+          ) : null}
           <span>risk {(open.stake * open.contracts).toFixed(2)}</span>
           {open.payout !== undefined ? (
             <span className="is-up">
@@ -190,14 +227,14 @@ export function TradesPanel({
       {rows.length === 0 ? (
         <p className="trades__empty">
           No trades saved yet. Start the bot from the Bot tab and every settled
-          basket on {symbol} will be recorded here.
+          basket on {symbol} will be recorded here with entry point details.
         </p>
       ) : (
         <div className="trades__table" role="table" aria-label="Saved trades">
           <div className="trades__row trades__row--head" role="row">
             <span role="columnheader">Time</span>
             <span role="columnheader">Market</span>
-            <span role="columnheader">Contract</span>
+            <span role="columnheader">Entry point</span>
             <span role="columnheader">Size</span>
             <span role="columnheader">Settled</span>
             <span role="columnheader">Result</span>
@@ -218,18 +255,20 @@ export function TradesPanel({
 }
 
 function TradeRow({ trade, running }: { trade: StoredTrade; running: number }) {
+  const entry = entryPointLines(trade);
   return (
     <div role="row" className={`trades__row ${trade.won ? "is-win" : "is-loss"}`}>
       <span role="cell">
         {clock(trade.at)}
         <em className="trades__day">{day(trade.at)}</em>
+        {trade.entryAt !== undefined && trade.entryAt !== trade.at ? (
+          <em className="trades__day">in {clock(trade.entryAt)}</em>
+        ) : null}
       </span>
       <span role="cell">{trade.symbol ?? "—"}</span>
-      <span role="cell">
-        <b>
-          {trade.side === "DIGITMATCH" ? "Matches" : "Differs"} {trade.digit}
-        </b>
-        {trade.mode === "paper" ? <em className="trades__id">paper</em> : null}
+      <span role="cell" className="trades__entry">
+        <b>{entry.title}</b>
+        <em>{entry.meta}</em>
       </span>
       <span role="cell">
         {trade.contracts} × {trade.stake.toFixed(2)}
