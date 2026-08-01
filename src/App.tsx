@@ -798,9 +798,9 @@ export default function App() {
       return;
     }
 
-    // Browser only allows audio after a click — unlock here so Good chimes later.
+    // Browser only allows audio after a click — unlock + test beep on Start.
     unlockAudio();
-    playAlmostSetupSound();
+    playGoodSetupSound();
     botHaltRef.current = false;
 
     const botForStart =

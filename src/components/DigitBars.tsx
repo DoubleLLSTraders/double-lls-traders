@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DIGITS } from "../lib/analysis/digits";
 import type { DigitStats } from "../lib/analysis/digits";
 import {
@@ -6,6 +6,11 @@ import {
   type PulseRequirements,
 } from "../lib/analysis/marketPulse";
 import type { MarketSignal } from "../lib/analysis/signal";
+import {
+  playGoodSetupSound,
+  playAlmostSetupSound,
+  unlockAudio,
+} from "../lib/sound";
 
 type Tone = "high" | "second" | "low" | "neutral";
 
@@ -61,6 +66,27 @@ export function DigitBars({
     () => readMarketPulse(stats, signal, requirements),
     [stats, signal, requirements],
   );
+  const alertKeyRef = useRef("");
+
+  // Fire alert from the Digits panel itself — what you see is what beeps.
+  useEffect(() => {
+    const key = `${pulse.mood}|${pulse.label}|${signal?.digit ?? ""}`;
+    if (pulse.mood === "good") {
+      if (alertKeyRef.current !== key) {
+        alertKeyRef.current = key;
+        void playGoodSetupSound();
+      }
+      return;
+    }
+    if (pulse.label === "Almost") {
+      if (alertKeyRef.current !== key) {
+        alertKeyRef.current = key;
+        void playAlmostSetupSound();
+      }
+      return;
+    }
+    alertKeyRef.current = "";
+  }, [pulse.mood, pulse.label, signal?.digit]);
 
   useEffect(() => {
     if (latestDigit === null || latestDigit === undefined) return;
@@ -173,6 +199,19 @@ export function DigitBars({
           <span className="digit-map__pulse-dot" aria-hidden="true" />
           <strong>{pulse.label}</strong>
           <em>{pulse.detail}</em>
+          {pulse.mood === "good" || pulse.label === "Almost" ? (
+            <button
+              type="button"
+              className="digit-map__alert-btn"
+              onClick={() => {
+                unlockAudio();
+                if (pulse.mood === "good") playGoodSetupSound();
+                else playAlmostSetupSound();
+              }}
+            >
+              🔔 Sound
+            </button>
+          ) : null}
         </div>
         <div className="digit-map__legend">
           <span className="is-high">Hot</span>

@@ -1,6 +1,11 @@
 import { useState } from "react";
 import { useTheme } from "../hooks/useTheme";
-import { isSoundEnabled, playWinSound, setSoundEnabled } from "../lib/sound";
+import {
+  isSoundEnabled,
+  playGoodSetupSound,
+  setSoundEnabled,
+  unlockAudio,
+} from "../lib/sound";
 import { APP_NAME, APP_TAGLINE } from "../lib/brand";
 import logoDark from "../assets/logo.png";
 import logoLight from "../assets/logo-light.png";
@@ -51,7 +56,10 @@ export function BrandStamp() {
                 const next = !soundOn;
                 setSoundEnabled(next);
                 setSoundOn(next);
-                if (next) playWinSound();
+                if (next) {
+                  unlockAudio();
+                  playGoodSetupSound();
+                }
               }}
             >
               <SpeakerIcon on={soundOn} />

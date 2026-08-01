@@ -1,18 +1,15 @@
 /**
- * Trade result sounds, synthesised with the Web Audio API so the app ships no
- * audio assets.
- *
- * Browsers block audio until the user interacts with the page, so the context
- * is created lazily and resumed on every play — the first sound after a click
- * (Start) unlocks it.
+ * Trade / analyzer sounds via Web Audio API.
+ * Browsers block audio until a user gesture — call unlockAudio() from Start.
  */
 
-import { storageKey } from "../lib/platform";
+import { storageKey } from "./platform";
 
 const STORAGE_KEY = storageKey("sound");
 
 let context: AudioContext | null = null;
 let enabled = readEnabled();
+let unlocked = false;
 
 function readEnabled(): boolean {
   if (typeof localStorage === "undefined") return true;
@@ -28,151 +25,130 @@ export function setSoundEnabled(next: boolean): void {
   try {
     localStorage.setItem(STORAGE_KEY, next ? "on" : "off");
   } catch {
-    // Private-mode storage failures should never break trading.
+    // ignore
   }
 }
 
-function audio(): AudioContext | null {
+function getContext(): AudioContext | null {
   if (typeof window === "undefined") return null;
-  const Ctor = window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const Ctor =
+    window.AudioContext ??
+    (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   context ??= new Ctor();
-  if (context.state === "suspended") void context.resume();
   return context;
 }
 
-/** Call from a click (Start) so later Good alerts are not blocked by the browser. */
+/** Must run inside a click/tap handler (Start / speaker). */
 export function unlockAudio(): void {
-  const ctx = audio();
+  setSoundEnabled(true);
+  enabled = true;
+  const ctx = getContext();
   if (!ctx) return;
-  if (ctx.state === "suspended") void ctx.resume();
+  void ctx.resume().then(() => {
+    unlocked = true;
+  });
+  // Silent blip so Safari marks the context as user-activated.
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const amp = ctx.createGain();
+    osc.frequency.value = 440;
+    amp.gain.value = 0.0001;
+    osc.connect(amp).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.03);
+    unlocked = true;
+  } catch {
+    // ignore
+  }
 }
 
-/** A struck-bell partial: sine tone with a percussive exponential decay. */
-function bell(
+function tone(
   ctx: AudioContext,
   frequency: number,
   startAt: number,
   duration: number,
   gain: number,
+  type: OscillatorType = "square",
 ): void {
   const osc = ctx.createOscillator();
   const amp = ctx.createGain();
-  osc.type = "sine";
+  osc.type = type;
   osc.frequency.setValueAtTime(frequency, startAt);
-  amp.gain.setValueAtTime(0.0001, startAt);
-  amp.gain.exponentialRampToValueAtTime(gain, startAt + 0.008);
-  amp.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+  amp.gain.setValueAtTime(0, startAt);
+  amp.gain.linearRampToValueAtTime(gain, startAt + 0.02);
+  amp.gain.linearRampToValueAtTime(gain * 0.7, startAt + duration * 0.5);
+  amp.gain.linearRampToValueAtTime(0, startAt + duration);
   osc.connect(amp).connect(ctx.destination);
   osc.start(startAt);
-  osc.stop(startAt + duration + 0.02);
+  osc.stop(startAt + duration + 0.05);
 }
 
-/** Short filtered noise burst — the register drawer / coin rattle. */
-function rattle(ctx: AudioContext, startAt: number, duration: number, gain: number): void {
-  const frames = Math.floor(ctx.sampleRate * duration);
-  const buffer = ctx.createBuffer(1, frames, ctx.sampleRate);
-  const data = buffer.getChannelData(0);
-  for (let i = 0; i < frames; i += 1) {
-    data[i] = (Math.random() * 2 - 1) * (1 - i / frames) ** 2;
+async function withAudio(
+  play: (ctx: AudioContext, now: number) => void,
+): Promise<boolean> {
+  if (!enabled) return false;
+  const ctx = getContext();
+  if (!ctx) return false;
+  try {
+    if (ctx.state === "suspended") {
+      await ctx.resume();
+    }
+    unlocked = true;
+    play(ctx, ctx.currentTime + 0.02);
+    return true;
+  } catch {
+    return false;
   }
-
-  const source = ctx.createBufferSource();
-  source.buffer = buffer;
-
-  const filter = ctx.createBiquadFilter();
-  filter.type = "bandpass";
-  filter.frequency.setValueAtTime(2600, startAt);
-  filter.Q.setValueAtTime(1.2, startAt);
-
-  const amp = ctx.createGain();
-  amp.gain.setValueAtTime(gain, startAt);
-
-  source.connect(filter).connect(amp).connect(ctx.destination);
-  source.start(startAt);
-  source.stop(startAt + duration);
 }
 
-/** Cash-register "cha-ching": drawer rattle, then two bright ascending bells. */
+/** Cash-register win. */
 export function playWinSound(): void {
-  if (!enabled) return;
-  const ctx = audio();
-  if (!ctx) return;
-  const now = ctx.currentTime + 0.01;
-
-  rattle(ctx, now, 0.09, 0.18);
-
-  // "cha"
-  bell(ctx, 1046.5, now + 0.02, 0.24, 0.3);
-  bell(ctx, 1567.98, now + 0.02, 0.2, 0.16);
-
-  // "ching" — higher and left to ring out
-  bell(ctx, 1396.91, now + 0.13, 0.75, 0.32);
-  bell(ctx, 2093.0, now + 0.13, 0.6, 0.18);
-  bell(ctx, 2793.83, now + 0.13, 0.45, 0.09);
+  void withAudio((ctx, now) => {
+    tone(ctx, 1046, now, 0.2, 0.35, "sine");
+    tone(ctx, 1568, now + 0.12, 0.45, 0.4, "sine");
+    tone(ctx, 2093, now + 0.12, 0.35, 0.22, "sine");
+  });
 }
 
-/**
- * Analyzer found Digits Good / Trade now — louder ascending alert so it is
- * hard to miss before the buy lands.
- */
+/** Digits Good / Trade now — loud triple beep, hard to miss. */
 export function playGoodSetupSound(): void {
-  if (!enabled) return;
-  const ctx = audio();
-  if (!ctx) return;
-  void ctx.resume();
-  const now = ctx.currentTime + 0.01;
-
-  rattle(ctx, now, 0.07, 0.16);
-  bell(ctx, 880.0, now, 0.22, 0.38);
-  bell(ctx, 1174.7, now + 0.1, 0.28, 0.42);
-  bell(ctx, 1568.0, now + 0.22, 0.55, 0.45);
-  bell(ctx, 2349.3, now + 0.22, 0.4, 0.2);
+  void withAudio((ctx, now) => {
+    // Three bright square beeps + high ring
+    tone(ctx, 880, now, 0.18, 0.55, "square");
+    tone(ctx, 1175, now + 0.2, 0.2, 0.55, "square");
+    tone(ctx, 1568, now + 0.42, 0.35, 0.6, "square");
+    tone(ctx, 2349, now + 0.42, 0.4, 0.28, "sine");
+    // Repeat once so it cuts through
+    tone(ctx, 880, now + 0.9, 0.16, 0.5, "square");
+    tone(ctx, 1568, now + 1.1, 0.4, 0.55, "square");
+  });
+  try {
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      navigator.vibrate([80, 40, 80, 40, 120]);
+    }
+  } catch {
+    // ignore
+  }
 }
 
-/** Setup is close (Almost) — softer two-tone ping. */
+/** Almost — two soft beeps. */
 export function playAlmostSetupSound(): void {
-  if (!enabled) return;
-  const ctx = audio();
-  if (!ctx) return;
-  void ctx.resume();
-  const now = ctx.currentTime + 0.01;
-  bell(ctx, 740.0, now, 0.16, 0.28);
-  bell(ctx, 988.0, now + 0.1, 0.28, 0.32);
+  void withAudio((ctx, now) => {
+    tone(ctx, 740, now, 0.14, 0.35, "square");
+    tone(ctx, 988, now + 0.16, 0.22, 0.4, "square");
+  });
 }
 
-/** Loss: a short pitch-drop thud, like a coin falling away. */
+/** Loss thud. */
 export function playLossSound(): void {
-  if (!enabled) return;
-  const ctx = audio();
-  if (!ctx) return;
-  const now = ctx.currentTime + 0.01;
-  const duration = 0.42;
+  void withAudio((ctx, now) => {
+    tone(ctx, 220, now, 0.35, 0.45, "triangle");
+    tone(ctx, 110, now + 0.05, 0.4, 0.35, "sine");
+  });
+}
 
-  const osc = ctx.createOscillator();
-  const amp = ctx.createGain();
-  osc.type = "sine";
-  osc.frequency.setValueAtTime(420, now);
-  osc.frequency.exponentialRampToValueAtTime(70, now + duration);
-
-  amp.gain.setValueAtTime(0.0001, now);
-  amp.gain.exponentialRampToValueAtTime(0.34, now + 0.02);
-  amp.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-
-  osc.connect(amp).connect(ctx.destination);
-  osc.start(now);
-  osc.stop(now + duration + 0.02);
-
-  // Low body underneath so it lands as a thud rather than a beep.
-  const sub = ctx.createOscillator();
-  const subAmp = ctx.createGain();
-  sub.type = "triangle";
-  sub.frequency.setValueAtTime(150, now);
-  sub.frequency.exponentialRampToValueAtTime(48, now + duration * 0.8);
-  subAmp.gain.setValueAtTime(0.0001, now);
-  subAmp.gain.exponentialRampToValueAtTime(0.22, now + 0.03);
-  subAmp.gain.exponentialRampToValueAtTime(0.0001, now + duration * 0.9);
-  sub.connect(subAmp).connect(ctx.destination);
-  sub.start(now);
-  sub.stop(now + duration);
+export function isAudioUnlocked(): boolean {
+  return unlocked;
 }
