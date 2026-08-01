@@ -1681,22 +1681,31 @@ html[data-theme="light"] .workspace__flag {
   align-items: stretch;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .workspace__chart {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   gap: 12px;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.workspace__chart > .digit-strip,
+.workspace__chart > .ticker {
+  min-width: 0;
 }
 
 .workspace__chart .tick-chart,
 .workspace__chart .block.tick-chart {
-  flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .workspace__side {
@@ -1705,15 +1714,48 @@ html[data-theme="light"] .workspace__flag {
   gap: 12px;
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  height: 100%;
+  overflow: hidden;
   align-items: stretch;
 }
 
-.workspace__side > * {
+.workspace__side-main {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.workspace__side-main > * {
   flex-shrink: 0;
   min-width: 0;
+}
+
+.workspace__side .digit-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: clamp(6px, 1.2vw, 12px) clamp(4px, 0.8vw, 8px);
+  padding: 0;
+}
+
+.workspace__side .digit-tile__ring-wrap {
+  width: min(100%, 48px);
+  height: auto;
+  aspect-ratio: 1;
+  margin-inline: auto;
+}
+
+.workspace__side .digit-tile__ring {
+  width: 100%;
+  height: 100%;
+}
+
+.workspace__side .digit-map__pulse-main em,
+.workspace__side .digit-map__legend {
+  overflow-wrap: anywhere;
 }
 
 .workspace__bot {
@@ -1851,7 +1893,6 @@ html[data-theme="light"] .split-layout__handle:focus-visible {
   flex-shrink: 0;
   display: flex;
   align-items: stretch;
-  margin-top: auto;
   padding: 14px 16px;
   border-radius: 12px;
   background: var(--surface-deeper);
@@ -3280,6 +3321,7 @@ html[data-theme="light"] .market-menu {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  flex-shrink: 0;
   padding: 12px 14px 10px;
   border-bottom: 1px solid var(--line-faint);
 }
@@ -3374,8 +3416,8 @@ html[data-theme="light"] .tick-chart__price-line .is-up {
 
 .tick-chart__frame {
   position: relative;
-  flex: 1;
-  min-height: 360px;
+  flex: 1 1 0;
+  min-height: 0;
   border-radius: 8px;
   border: none;
   background: var(--chart-frame);
@@ -3390,7 +3432,7 @@ html[data-theme="light"] .tick-chart__frame {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 360px;
+  min-height: 0;
   cursor: crosshair;
   touch-action: none;
 }
@@ -6281,13 +6323,14 @@ html[data-theme="light"] .tick-chart__tip {
     max-width: min(320px, 22vw);
   }
 
-  .tick-chart__frame,
-  .tick-chart__svg {
-    max-height: min(52vh, 680px);
+  .workspace__chart {
+    max-height: none;
   }
 
-  .workspace__chart {
-    max-height: min(58vh, 760px);
+  .tick-chart__frame,
+  .tick-chart__svg {
+    max-height: none;
+    min-height: 0;
   }
 
   .workspace__side .brand-stamp__inner {
@@ -6507,6 +6550,21 @@ html[data-theme="light"] .tick-chart__tip {
   .workspace {
     height: auto;
     min-height: min(72vh, 900px);
+  }
+
+  .workspace__side {
+    height: auto;
+    overflow: visible;
+  }
+
+  .workspace__side-main {
+    flex: none;
+    overflow: visible;
+  }
+
+  .workspace__chart {
+    height: auto;
+    overflow: visible;
   }
 
   .workspace__body,
