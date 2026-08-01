@@ -1,4 +1,5 @@
 import { summarise } from "./digits";
+import { analyzerAllowsEntry } from "./analyzerGate";
 import {
   buildMarketSignal,
   isArmedSignal,
@@ -176,20 +177,24 @@ export interface FindBestMarketOptions {
 
 function isTradeReady(
   signal: MarketSignal,
-  sidePreference: BotSettings["sidePreference"],
+  settings: Pick<
+    BotSettings,
+    "minColdGap" | "minSample" | "maxMomentumGap" | "sidePreference"
+  >,
 ): boolean {
   const prefersDiffers =
-    sidePreference === "differs" || sidePreference === "winrate";
-  if (!signal.timingOk || !signal.evOk || !signal.barrierAligned || !signal.primaryBarrier) {
-    return false;
-  }
-  if (prefersDiffers) {
-    if (signal.side !== "DIGITDIFF") return false;
-    if (!signal.coldMarginOk) return false;
-  } else if (sidePreference === "matches") {
-    if (signal.side !== "DIGITMATCH") return false;
-  }
-  return true;
+    settings.sidePreference === "differs" || settings.sidePreference === "winrate";
+  const side = prefersDiffers
+    ? ("DIGITDIFF" as const)
+    : settings.sidePreference === "matches"
+      ? ("DIGITMATCH" as const)
+      : signal.side;
+  return analyzerAllowsEntry(signal, {
+    minColdGap: settings.minColdGap,
+    minSample: settings.minSample,
+    maxMomentumGap: settings.maxMomentumGap,
+    side,
+  }).ok;
 }
 
 /**
@@ -298,7 +303,7 @@ export async function findBestMarket(
     const ready = ranked.find(
       (entry) =>
         !isLowPayoutSymbol(entry.symbol) &&
-        isTradeReady(entry.signal, settings.sidePreference),
+        isTradeReady(entry.signal, settings),
     );
     return ready ?? null;
   }
@@ -307,7 +312,7 @@ export async function findBestMarket(
     const ready = ranked.find(
       (entry) =>
         !isLowPayoutSymbol(entry.symbol) &&
-        isTradeReady(entry.signal, settings.sidePreference),
+        isTradeReady(entry.signal, settings),
     );
     if (ready) return ready;
   }

@@ -1,3 +1,4 @@
+import { isAnalyzerGood } from "./analyzerGate";
 import type { DigitStats } from "./digits";
 import { isArmedSignal, type MarketSignal } from "./signal";
 
@@ -8,6 +9,8 @@ export interface PulseRequirements {
   minColdGap: number;
   /** Sample size floor for high/armed. */
   minSample: number;
+  maxMomentumGap?: number;
+  side?: "DIGITMATCH" | "DIGITDIFF";
   /** Short market label, e.g. "V75". */
   volatilityLabel?: string;
 }
@@ -77,18 +80,18 @@ export function readMarketPulse(
   const differs =
     !signal || signal.side === "DIGITDIFF" ? signal : null;
 
+  const deskSettings = {
+    minColdGap: minGap,
+    minSample,
+    maxMomentumGap: requirements?.maxMomentumGap ?? 2,
+    side: requirements?.side ?? ("DIGITDIFF" as const),
+  };
   const deskGood =
-    !!differs &&
-    differs.evOk &&
-    differs.timingOk &&
-    differs.barrierAligned &&
-    differs.primaryBarrier &&
-    sampleSize >= minSample &&
-    (signalGap ?? 0) >= minGap;
+    !!differs && isAnalyzerGood(differs, deskSettings);
 
-  // ── Ready when the desk bot can fire ─────────────────────────────────
+  // ── Good ONLY when the bot is allowed to buy (same gate) ─────────────
 
-  if (differs && (isArmedSignal(differs) || deskGood)) {
+  if (differs && deskGood) {
     return withNeed(
       "good",
       isArmedSignal(differs) ? "Trade now" : "Good market",

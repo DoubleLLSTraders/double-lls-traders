@@ -1,3 +1,5 @@
+import { isAnalyzerGood } from "../analysis/analyzerGate";
+import type { MarketSignal } from "../analysis/signal";
 import type { BotSettings } from "./types";
 
 export interface DiffersFastRiskCaps {
@@ -122,24 +124,10 @@ export function isDiffersFastProfile(settings: BotSettings): boolean {
   );
 }
 
-/** Live Digits / Start: setup the desk will actually buy. */
-export function isDeskTradeReady(signal: {
-  side: string;
-  timingOk: boolean;
-  evOk: boolean;
-  barrierAligned: boolean;
-  primaryBarrier: boolean;
-  coldMarginOk: boolean;
-  watching: { signalGap: number | null; sampleSize: number };
-}, settings: Pick<BotSettings, "minColdGap" | "minSample" | "side">): boolean {
-  if (settings.side === "DIGITDIFF" && signal.side !== "DIGITDIFF") return false;
-  if (signal.watching.sampleSize < settings.minSample) return false;
-  if (!signal.timingOk || !signal.evOk) return false;
-  if (!signal.barrierAligned || !signal.primaryBarrier) return false;
-  if (signal.side === "DIGITDIFF" && !signal.coldMarginOk) return false;
-  const gap = signal.watching.signalGap;
-  if (signal.side === "DIGITDIFF" && (gap === null || gap < settings.minColdGap)) {
-    return false;
-  }
-  return true;
+/** Live Digits / Start: same Good gate the bot must obey. */
+export function isDeskTradeReady(
+  signal: MarketSignal,
+  settings: Pick<BotSettings, "minColdGap" | "minSample" | "side" | "maxMomentumGap">,
+): boolean {
+  return isAnalyzerGood(signal, settings);
 }

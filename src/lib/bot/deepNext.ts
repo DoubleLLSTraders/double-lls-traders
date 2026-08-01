@@ -4,6 +4,7 @@
  * First entry follows the desk profile (settings): EV + timing + #1 cold.
  * Follow-ups stay strict and bank after one win.
  */
+import { analyzerAllowsEntry } from "../analysis/analyzerGate";
 import { isLowPayoutSymbol } from "./performance";
 import {
   confirmScore,
@@ -98,48 +99,16 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     };
   }
 
-  if (!signal.barrierAligned || !signal.primaryBarrier) {
+  // Same Digits Good gate — first entry and follow-ups.
+  const analyzer = analyzerAllowsEntry(signal, settings);
+  if (!analyzer.ok) {
     return {
       ok: false,
-      reason: `Deep · ${signal.digit} is not the #1 cold/hot barrier · get out`,
-    };
-  }
-
-  if (!signal.timingOk) {
-    return {
-      ok: false,
-      reason:
-        signal.side === "DIGITDIFF"
-          ? `Deep · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap} · get out`
-          : `Deep · momentum gap weak · get out`,
+      reason: analyzer.reason.replace(/^Analyzer ·/, "Deep · "),
     };
   }
 
   const gap = signal.watching.signalGap;
-  if (
-    signal.side === "DIGITDIFF" &&
-    (gap === null || gap < settings.minColdGap)
-  ) {
-    return {
-      ok: false,
-      reason: `Deep · cold gap ${gap ?? "—"} < ${settings.minColdGap} · get out`,
-    };
-  }
-
-  if (!signal.evOk) {
-    return {
-      ok: false,
-      reason: `Deep · EV closed (${signal.watching.wilsonBound || `${signal.digitPercent.toFixed(1)}%`}) · get out`,
-    };
-  }
-
-  if (signal.side === "DIGITDIFF" && (!signal.coldMarginOk || !signal.separationOk)) {
-    return {
-      ok: false,
-      reason: `Deep · cold lead thin (${signal.watching.separation || "—"}) · get out`,
-    };
-  }
-
   const sep = signal.watching.separation || "";
   const leadMatch = /cold −(\d+)/.exec(sep);
   const needLead = firstEntry ? MIN_LEAD_FIRST : MIN_LEAD_FOLLOW;
@@ -153,17 +122,10 @@ export function analyzeNextPredictionDeep(ctx: DeepNextContext): DeepNextVerdict
     }
   }
 
-  // First entry: desk profile — EV + timing + #1 cold is enough.
   if (firstEntry) {
-    if (signal.side === "DIGITDIFF" && signal.digitPercent > 9.5) {
-      return {
-        ok: false,
-        reason: `Deep · cold ${signal.digitPercent.toFixed(1)}% > 9.5% desk max · get out`,
-      };
-    }
     return {
       ok: true,
-      summary: `Desk clear · ${signal.label} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}% · power ${signal.power}`,
+      summary: `Analyzer Good · ${analyzer.label} · power ${signal.power}`,
     };
   }
 

@@ -1,3 +1,4 @@
+import { analyzerAllowsEntry } from "../analysis/analyzerGate";
 import type { MarketSignal } from "../analysis/signal";
 import { confirmScore, isArmedSignal } from "../analysis/signal";
 import { isLowPayoutSymbol, profitRate } from "./performance";
@@ -160,6 +161,13 @@ export function evaluateEntry(
       reason: `Skip · sample ${signal.watching.sampleSize}/${settings.minSample}`,
     };
   }
+
+  // Digits Good / Trade now — hard lock. Warming/Building cannot buy.
+  const analyzer = analyzerAllowsEntry(signal, settings);
+  if (!analyzer.ok) {
+    return { ok: false, reason: analyzer.reason.replace(/^Analyzer ·/, "Skip ·") };
+  }
+
   if (settings.skipLowConfidence && signal.confidence !== "high") {
     return {
       ok: false,

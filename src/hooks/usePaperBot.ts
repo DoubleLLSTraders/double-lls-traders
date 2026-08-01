@@ -6,6 +6,7 @@ import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade"
 import type { MarketSignal } from "../lib/analysis/signal";
 import { isArmedSignal } from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
+import { liveTapeAllowsEntry } from "../lib/analysis/analyzerGate";
 import { capStake, evaluateEntry, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { analyzeNextPredictionDeep, MAX_WINS_BEFORE_BANK } from "../lib/bot/deepNext";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
@@ -914,8 +915,24 @@ export function usePaperBot(options: {
         }
       }
 
+      // Live tape must still match Digits Good on this tick — no stale buy.
+      const tape = liveTapeAllowsEntry(
+        liveSignal,
+        nextSettings,
+        ticks.map((tick) => tick.digit),
+      );
+      if (!tape.ok) {
+        nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
+        setSession(nextSession);
+        setWaitReason(tape.reason.replace(/^Analyzer ·/, "Wait ·"));
+        if (nextSession.skipped % 5 === 1) {
+          setLog((lines) => pushLog(lines, tape.reason));
+        }
+        return;
+      }
+
       setWaitReason(
-        `Opening · ${liveSignal.side === "DIGITMATCH" ? "Matches" : "Differs"} ${liveSignal.digit}`,
+        `Opening · analyzer Good · ${liveSignal.side === "DIGITMATCH" ? "Matches" : "Differs"} ${liveSignal.digit}`,
       );
 
       if (entriesBlocked()) {

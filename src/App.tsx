@@ -525,6 +525,7 @@ export default function App() {
         const deskReady = isDeskTradeReady(live, {
           minColdGap: bot.minColdGap,
           minSample: bot.minSample,
+          maxMomentumGap: bot.maxMomentumGap,
           side: bot.side,
         });
         setTimerNote(
@@ -547,6 +548,7 @@ export default function App() {
       symbol,
       bot.minSample,
       bot.minColdGap,
+      bot.maxMomentumGap,
       bot.side,
     ],
   );
@@ -645,21 +647,19 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // Live desk: keep analyzing a fresh volatility so Digits is not stuck on one
-  // index. Idle rotates every ~20s; while hunting the bot also rotates on skips.
+  // While hunting, keep rotating volatility so analyze stays live. Idle stays
+  // on the user's market — only the bot hop changes index.
   useEffect(() => {
-    if (scanningMarket || arm.arming) return;
+    if (!bot.running || scanningMarket || arm.arming) return;
     if (!feed.client || feed.state !== "ready") return;
-    const ms = bot.running ? 22000 : 18000;
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current || switchHoldRef.current) return;
-      void autoPickMarket(
-        bot.running
-          ? "Live analyze · next volatility…"
-          : "Live analyze · scanning next volatility…",
-        { preferReady: true, excludeCurrent: true },
-      );
-    }, ms);
+      if (paper.session.open || paper.orderPending) return;
+      void autoPickMarket("Live analyze · next volatility…", {
+        preferReady: true,
+        excludeCurrent: true,
+      });
+    }, 25000);
     return () => window.clearInterval(id);
   }, [
     bot.running,
@@ -668,6 +668,8 @@ export default function App() {
     feed.client,
     feed.state,
     autoPickMarket,
+    paper.session.open,
+    paper.orderPending,
   ]);
 
   const displayBalance =
@@ -1298,6 +1300,8 @@ export default function App() {
                   requirements={{
                     minColdGap: bot.minColdGap,
                     minSample: bot.minSample,
+                    maxMomentumGap: bot.maxMomentumGap,
+                    side: bot.side,
                     volatilityLabel: volatilityTag(symbol),
                   }}
                   selectedDigit={
