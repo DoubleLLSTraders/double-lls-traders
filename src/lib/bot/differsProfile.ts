@@ -11,12 +11,12 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v15) — Lock → Confirm → Trade now.
+ * Differs desk profile (v16) — fast Lock → Confirm; skip 1st Trade now.
  *
- * Fake few-second flashes never reach Trade now. Needs ~10s lock + ~4s
- * confirm with non-shrinking gap before the desk may buy.
+ * After Start, buy the next confirmed cycle. Market stays glued through
+ * Confirm/Trade now so the executor does not buy a changed tape.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 15;
+export const DIFFERS_FAST_PROFILE_VERSION = 16;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {

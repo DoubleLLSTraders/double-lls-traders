@@ -84,6 +84,9 @@
   --scroll-thumb-hover: rgba(0, 255, 128, 0.5);
   --scroll-thumb-active: rgba(0, 255, 128, 0.72);
 
+  --layout-max: 100%;
+  --layout-side: minmax(280px, 380px);
+
   --font-display: "Syne", "Outfit", system-ui, sans-serif;
   --font-ui: "Outfit", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -1673,7 +1676,7 @@ html[data-theme="light"] .workspace__flag {
 
 .workspace__body {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(min(100%, 280px), 0.85fr);
+  grid-template-columns: minmax(0, 1fr) var(--layout-side);
   gap: 12px;
   align-items: stretch;
   flex: 1;
@@ -6183,12 +6186,142 @@ html[data-theme="light"] .tick-chart__tip {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   Responsive
+   Large screens & TV — cap width, stop panels stretching edge-to-edge
+   ═══════════════════════════════════════════════════════════════ */
+
+@media (min-width: 1400px) {
+  :root {
+    --layout-side: minmax(300px, 400px);
+  }
+
+  .topbar {
+    flex-wrap: nowrap;
+    gap: 16px 20px;
+  }
+
+  .topbar__nav {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .topbar__nav button {
+    min-width: 86px;
+  }
+
+  .workspace__bar {
+    flex-wrap: nowrap;
+    gap: 20px;
+  }
+
+  .workspace__quote {
+    flex-wrap: nowrap;
+    flex: 0 1 auto;
+  }
+
+  .workspace__controls {
+    flex-wrap: nowrap;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    margin-left: auto;
+  }
+
+  .workspace__ai {
+    max-width: min(520px, 36vw);
+  }
+
+  .workspace__session {
+    max-width: min(460px, 32vw);
+  }
+
+  .workspace__wait {
+    max-width: min(320px, 22vw);
+  }
+
+  .tick-chart__frame,
+  .tick-chart__svg {
+    max-height: min(52vh, 680px);
+  }
+
+  .workspace__chart {
+    max-height: min(58vh, 760px);
+  }
+
+  .ai-shell__split {
+    grid-template-columns: minmax(300px, 440px) minmax(360px, 1fr);
+  }
+
+  .split-layout__pane {
+    max-width: 58%;
+  }
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --layout-max: 1920px;
+    --layout-side: 400px;
+    font-size: 15px;
+  }
+
+  html {
+    background: #000;
+  }
+
+  html[data-theme="light"] {
+    background: #d4d4d4;
+  }
+
+  .app,
+  .app--setup {
+    max-width: var(--layout-max);
+    margin-inline: auto;
+    width: 100%;
+    padding-inline: max(20px, env(safe-area-inset-left)) max(20px, env(safe-area-inset-right));
+  }
+
+  .topbar__nav button {
+    min-width: 92px;
+    height: 36px;
+    font-size: 13px;
+  }
+
+  .status__balance,
+  .topbar .status__balance {
+    font-size: 24px;
+  }
+
+  .workspace__body {
+    grid-template-columns: minmax(0, 1fr) var(--layout-side);
+  }
+
+  .workspace__quote > div > b {
+    font-size: 30px;
+  }
+
+  .panel__head h2,
+  .trades__head h2,
+  .ai-shell__bar h2 {
+    font-size: 20px;
+  }
+}
+
+@media (min-width: 2560px) {
+  :root {
+    --layout-max: 2200px;
+    --layout-side: 420px;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Responsive (tablet / phone)
    ═══════════════════════════════════════════════════════════════ */
 
 @media (max-width: 1280px) {
+  :root {
+    --layout-side: minmax(220px, 320px);
+  }
+
   .workspace__body {
-    grid-template-columns: minmax(0, 1.25fr) minmax(220px, 0.75fr);
+    grid-template-columns: minmax(0, 1.25fr) var(--layout-side);
   }
 
   .ai-shell__split {
@@ -6240,8 +6373,12 @@ html[data-theme="light"] .tick-chart__tip {
 }
 
 @media (max-width: 1100px) {
+  :root {
+    --layout-side: minmax(200px, 280px);
+  }
+
   .workspace__body {
-    grid-template-columns: minmax(0, 1fr) minmax(200px, 0.72fr);
+    grid-template-columns: minmax(0, 1fr) var(--layout-side);
   }
 
   .workspace__bar {

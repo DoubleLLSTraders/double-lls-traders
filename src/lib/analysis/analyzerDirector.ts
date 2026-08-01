@@ -1,9 +1,10 @@
 /**
  * Analyzer director — Digits decides; the trade desk only follows.
  *
- * Fake flashes that last only a few seconds must never become Trade now.
- * Flow: Locking (same digit stays Good) → Confirming (still Good, gap
- * never shrinks) → Trade now (desk may buy). Any fade restarts from zero.
+ * Steady but fast: short Lock → short Confirm → Trade now. Market hops are
+ * blocked while Confirming / Trade now so the feed cannot change mid-fire.
+ * (Desk may intentionally skip the first Trade now after Start, then buy
+ * the next cycle immediately while the market stays glued.)
  */
 import {
   analyzerAllowsEntry,
@@ -12,13 +13,13 @@ import {
 import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
 
-/** Phase 1 — build a real cold hold (~7s on 1s indices). */
-export const LOCK_TICKS = 6;
-export const LOCK_MS = 7_000;
+/** Phase 1 — prove cold is real (~4s on 1s indices). */
+export const LOCK_TICKS = 4;
+export const LOCK_MS = 4_000;
 
-/** Phase 2 — prove it is not fading before Trade now (~3s more). */
-export const CONFIRM_TICKS = 3;
-export const CONFIRM_MS = 3_000;
+/** Phase 2 — quick anti-fade check, then arm buy immediately. */
+export const CONFIRM_TICKS = 2;
+export const CONFIRM_MS = 1_500;
 
 /** @deprecated use LOCK_TICKS — kept for UI copy helpers */
 export const STEADY_TICKS = LOCK_TICKS + CONFIRM_TICKS;
@@ -68,7 +69,8 @@ function holdKey(symbol: string, signal: MarketSignal): string {
 }
 
 function firmGapFloor(settings: DeskSettings, side: MarketSignal["side"]): number {
-  return side === "DIGITDIFF" ? settings.minColdGap + 2 : settings.minColdGap;
+  // +1 air is enough to reject soft flashes without waiting for a peak to die.
+  return side === "DIGITDIFF" ? settings.minColdGap + 1 : settings.minColdGap;
 }
 
 /**
@@ -96,7 +98,7 @@ export function isPromisingSetup(
   return false;
 }
 
-/** Stay glued only while proving a real entry (Confirm / Trade now / clean Lock). */
+/** Stay glued only while proving / firing a real entry. */
 export function shouldHoldMarket(
   hold: AnalyzerHold | null,
   buyNow: boolean,
@@ -181,17 +183,17 @@ export function advanceAnalyzerDirector(
     };
   }
 
-  // Firmer cold while proving the entry — lukewarm colds fade fast.
-  if (side === "DIGITDIFF" && signal.digitPercent > 9.0) {
+  // Firmer cold while proving — but 9.2 keeps real entries from dying mid-lock.
+  if (side === "DIGITDIFF" && signal.digitPercent > 9.2) {
     return {
       gate: {
         ok: false,
-        reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.0% · not firm`,
+        reason: `Analyzer · cold ${signal.digitPercent.toFixed(1)}% > 9.2% · not firm`,
       },
       buyNow: false,
       hold: null,
       label: "Almost",
-      detail: `${sideLabel} ${digit} · cold ${signal.digitPercent.toFixed(1)}% · need ≤9.0% for steady`,
+      detail: `${sideLabel} ${digit} · cold ${signal.digitPercent.toFixed(1)}% · need ≤9.2% for steady`,
       digit,
       side,
     };
@@ -212,8 +214,8 @@ export function advanceAnalyzerDirector(
     );
   }
 
-  // Any gap shrink = fading flash — never buy that.
-  if (side === "DIGITDIFF" && gap < prev.lastGap) {
+  // Allow 1-tick gap noise; only real fades restart (missed the peak otherwise).
+  if (side === "DIGITDIFF" && gap < prev.lastGap - 1) {
     return restartLock(
       key,
       digit,
@@ -228,13 +230,15 @@ export function advanceAnalyzerDirector(
 
   const heldMs = nowMs - prev.sinceMs;
   const count = prev.count + 1;
+  // Track peak gap so noise dips of 1 do not lower the floor forever.
+  const trackedGap = Math.max(gap, prev.lastGap);
 
   // ── Phase 1: Locking ────────────────────────────────────────────────
   if (prev.phase === "lock") {
     const hold: AnalyzerHold = {
       ...prev,
       count,
-      lastGap: gap,
+      lastGap: trackedGap,
       sinceMs: prev.sinceMs,
       phase: "lock",
     };
@@ -254,7 +258,7 @@ export function advanceAnalyzerDirector(
     const confirmHold: AnalyzerHold = {
       key,
       count: 1,
-      lastGap: gap,
+      lastGap: trackedGap,
       digit,
       side,
       sinceMs: nowMs,
@@ -272,11 +276,11 @@ export function advanceAnalyzerDirector(
     };
   }
 
-  // ── Phase 2: Confirming ─────────────────────────────────────────────
+  // ── Phase 2: Confirming → Trade now (desk must fire this streak) ────
   const hold: AnalyzerHold = {
     ...prev,
     count,
-    lastGap: gap,
+    lastGap: trackedGap,
     sinceMs: prev.sinceMs,
     phase: "confirm",
   };

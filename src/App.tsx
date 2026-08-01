@@ -82,7 +82,7 @@ const WINDOW_SIZES = [500, 1000, 1500, 2000] as const;
 const AGREEMENT_WINDOWS = [500, 1000, 1500] as const;
 const BOT_SETTINGS_KEY = storageKey("bot-settings");
 /** v32: desk profile gap≥6 · n≥500 so Good/Start fire in minutes. */
-const BOT_SETTINGS_VERSION = 39;
+const BOT_SETTINGS_VERSION = 40;
 
 /** Volatility carousel — skip cheap-payout indices. */
 const VOL_CYCLE = MARKETS.filter((m) => !isLowPayoutSymbol(m.symbol)).map(
@@ -393,13 +393,18 @@ export default function App() {
     );
     analyzerHoldRef.current = next.hold;
     analyzerBuyNowRef.current = next.buyNow;
-    // Park only while Confirming / Trade now — Locking alone must not freeze hunt.
+    // Glue market through Confirm → Trade now → buy. Do not hop mid-fire.
     if (next.buyNow) {
-      tradeNowStayUntilRef.current = Date.now() + 8000;
+      tradeNowStayUntilRef.current = Date.now() + 15_000;
     } else if (next.hold?.phase === "confirm") {
       tradeNowStayUntilRef.current = Math.max(
         tradeNowStayUntilRef.current,
-        Date.now() + 5000,
+        Date.now() + 8_000,
+      );
+    } else if (next.hold?.phase === "lock" && next.hold.count >= 2) {
+      tradeNowStayUntilRef.current = Math.max(
+        tradeNowStayUntilRef.current,
+        Date.now() + 3_000,
       );
     }
     setAnalyzerDirective(next);
@@ -584,10 +589,11 @@ export default function App() {
       const now = Date.now();
       const hold = analyzerHoldRef.current;
       const buyNow = analyzerBuyNowRef.current === true;
+      // Never change market while Confirming, Trade now, or buy park window.
       if (buyNow || hold?.phase === "confirm") return;
+      if (now < tradeNowStayUntilRef.current) return;
       if (!force) {
         if (shouldHoldMarket(hold, buyNow, now)) return;
-        if (now < tradeNowStayUntilRef.current) return;
         if (
           isPromisingSetup(signalRef.current, {
             minColdGap: botGateRef.current.minColdGap,
@@ -598,6 +604,8 @@ export default function App() {
         ) {
           return;
         }
+      } else if (shouldHoldMarket(hold, buyNow, now)) {
+        return;
       }
       // Drop stalled lock so the next market starts clean.
       analyzerHoldRef.current = null;

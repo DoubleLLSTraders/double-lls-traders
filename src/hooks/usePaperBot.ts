@@ -179,8 +179,8 @@ export function usePaperBot(options: {
   analyzerDigitRef.current = analyzerDigit;
   analyzerSideRef.current = analyzerSide;
   /**
-   * After Start: skip the first Digits Trade now streak, buy on the second.
-   * Keeps the desk synced instead of chasing a signal that was already live.
+   * After Start: skip the first Digits Trade now streak, buy on the next.
+   * Intentional sync — do not chase a signal that was already forming at Start.
    */
   const syncPhaseRef = useRef<"await-first" | "skip-first" | "live">("await-first");
 
@@ -703,7 +703,7 @@ export function usePaperBot(options: {
       const sideLabel =
         followSide === "DIGITMATCH" ? "Matches" : "Differs";
 
-      // Start sync: ignore the first Trade now streak; buy on the next one.
+      // Start sync: skip first Trade now streak; buy the next one (intentional).
       if (syncPhaseRef.current === "await-first") {
         if (buyNow) {
           syncPhaseRef.current = "skip-first";
@@ -786,7 +786,8 @@ export function usePaperBot(options: {
         return;
       }
 
-      // Fire-time re-check — reject faded / hopped / fake flashes.
+      // Fire immediately on Digits Trade now — director already proved steady.
+      // Only reject hard fades / digit hops; do not re-wait for extra air.
       if (analyzerBuyNowRef.current !== true) {
         setWaitReason("Follow · Trade now dropped · no buy");
         return;
@@ -810,27 +811,13 @@ export function usePaperBot(options: {
         );
         return;
       }
-      // Reject soft / fading entries at the wire — need air under the gap.
       const liveGap = liveSignal.watching.signalGap;
-      const needGap = nextSettings.minColdGap + 2;
       if (
         followSide === "DIGITDIFF" &&
-        (liveGap === null || liveGap < needGap)
+        (liveGap === null || liveGap < nextSettings.minColdGap)
       ) {
         setWaitReason(
-          `Follow · gap ${liveGap ?? "—"}/${needGap} · not steady enough`,
-        );
-        setLog((lines) =>
-          pushLog(
-            lines,
-            `SKIP · fake/fading entry · gap ${liveGap ?? "—"} < ${needGap}`,
-          ),
-        );
-        return;
-      }
-      if (followSide === "DIGITDIFF" && liveSignal.digitPercent > 9.0) {
-        setWaitReason(
-          `Follow · cold ${liveSignal.digitPercent.toFixed(1)}% soft · no buy`,
+          `Follow · gap ${liveGap ?? "—"}/${nextSettings.minColdGap} · faded at wire`,
         );
         return;
       }
