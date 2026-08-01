@@ -1,6 +1,9 @@
 /**
- * Trade / analyzer sounds via Web Audio API.
- * Browsers block audio until a user gesture — call unlockAudio() from Start.
+ * Trade / analyzer sounds.
+ *
+ * Browsers block audio until a real click/tap. Unlock from Start or 🔔 Sound,
+ * then Trade now / win / loss can play. If a beep is blocked, it is queued and
+ * played on the next unlock gesture — never throw.
  */
 
 import { storageKey } from "./platform";
@@ -10,6 +13,10 @@ const STORAGE_KEY = storageKey("sound");
 let context: AudioContext | null = null;
 let enabled = readEnabled();
 let unlocked = false;
+/** Replay buffer for beeps that hit a suspended context. */
+let pendingPlay: (() => void) | null = null;
+/** HTMLAudio fallback primed during a user gesture (helps mobile / Pages). */
+let htmlBeep: HTMLAudioElement | null = null;
 
 function readEnabled(): boolean {
   if (typeof localStorage === "undefined") return true;
@@ -35,33 +42,152 @@ function getContext(): AudioContext | null {
     window.AudioContext ??
     (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
-  context ??= new Ctor();
+  try {
+    context ??= new Ctor();
+  } catch {
+    return null;
+  }
   return context;
 }
 
-/** Must run inside a click/tap handler (Start / speaker). */
-export function unlockAudio(): void {
-  setSoundEnabled(true);
-  enabled = true;
-  const ctx = getContext();
-  if (!ctx) return;
-  void ctx.resume().then(() => {
-    unlocked = true;
-  });
-  // Silent blip so Safari marks the context as user-activated.
+/** Tiny WAV (short square beep) — playable via HTMLAudio after a gesture. */
+function buildBeepDataUri(): string {
+  // 16-bit mono PCM, 22050 Hz, ~0.22s of 880Hz-ish tone
+  const sampleRate = 22050;
+  const duration = 0.22;
+  const samples = Math.floor(sampleRate * duration);
+  const dataSize = samples * 2;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+  const writeStr = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  for (let i = 0; i < samples; i++) {
+    const t = i / sampleRate;
+    const env = Math.min(1, i / 200) * Math.min(1, (samples - i) / 800);
+    const sample = Math.sin(2 * Math.PI * 988 * t) * 0.85 * env;
+    view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, sample)) * 0x7fff, true);
+  }
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return `data:audio/wav;base64,${btoa(binary)}`;
+}
+
+function primeHtmlBeep(): void {
+  if (typeof Audio === "undefined") return;
   try {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const amp = ctx.createGain();
-    osc.frequency.value = 440;
-    amp.gain.value = 0.0001;
-    osc.connect(amp).connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.03);
-    unlocked = true;
+    htmlBeep ??= new Audio(buildBeepDataUri());
+    htmlBeep.volume = 1;
+    // Play+pause during gesture so later play() is allowed on many mobiles.
+    const p = htmlBeep.play();
+    if (p && typeof p.then === "function") {
+      void p
+        .then(() => {
+          try {
+            htmlBeep?.pause();
+            if (htmlBeep) htmlBeep.currentTime = 0;
+          } catch {
+            // ignore
+          }
+        })
+        .catch(() => {
+          // ignore — Web Audio may still work
+        });
+    }
   } catch {
     // ignore
   }
+}
+
+function playHtmlFallback(): boolean {
+  if (!htmlBeep) return false;
+  try {
+    htmlBeep.currentTime = 0;
+    htmlBeep.volume = 1;
+    void htmlBeep.play();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function flushPending(): void {
+  const next = pendingPlay;
+  pendingPlay = null;
+  if (next) {
+    try {
+      next();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Must run inside a click/tap handler (Start / 🔔 Sound).
+ * Returns whether the audio context is running.
+ */
+export function unlockAudio(): boolean {
+  setSoundEnabled(true);
+  enabled = true;
+  const ctx = getContext();
+  primeHtmlBeep();
+  if (!ctx) {
+    unlocked = playHtmlFallback();
+    flushPending();
+    return unlocked;
+  }
+  const finish = (ok: boolean) => {
+    unlocked = ok;
+    if (ok) flushPending();
+  };
+  try {
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(() => {
+        finish(ctx.state === "running");
+        if (ctx.state === "running") {
+          // Audible unlock chirp so the user knows sound works.
+          try {
+            tone(ctx, 1175, ctx.currentTime + 0.01, 0.12, 0.55, "square");
+            tone(ctx, 1568, ctx.currentTime + 0.12, 0.18, 0.6, "square");
+          } catch {
+            // ignore
+          }
+        }
+      });
+    } else {
+      finish(true);
+      try {
+        tone(ctx, 1175, ctx.currentTime + 0.01, 0.12, 0.55, "square");
+        tone(ctx, 1568, ctx.currentTime + 0.12, 0.18, 0.6, "square");
+      } catch {
+        // ignore
+      }
+      flushPending();
+    }
+  } catch {
+    finish(playHtmlFallback());
+  }
+  // Optimistic — gesture path usually succeeds after resume settles.
+  unlocked = true;
+  return true;
 }
 
 function tone(
@@ -77,54 +203,76 @@ function tone(
   osc.type = type;
   osc.frequency.setValueAtTime(frequency, startAt);
   amp.gain.setValueAtTime(0, startAt);
-  amp.gain.linearRampToValueAtTime(gain, startAt + 0.02);
-  amp.gain.linearRampToValueAtTime(gain * 0.7, startAt + duration * 0.5);
-  amp.gain.linearRampToValueAtTime(0, startAt + duration);
+  amp.gain.linearRampToValueAtTime(gain, startAt + 0.015);
+  amp.gain.linearRampToValueAtTime(gain * 0.75, startAt + duration * 0.5);
+  amp.gain.linearRampToValueAtTime(0.0001, startAt + duration);
   osc.connect(amp).connect(ctx.destination);
   osc.start(startAt);
-  osc.stop(startAt + duration + 0.05);
+  osc.stop(startAt + duration + 0.04);
 }
 
 async function withAudio(
   play: (ctx: AudioContext, now: number) => void,
+  queueOnBlock = true,
 ): Promise<boolean> {
   if (!enabled) return false;
   const ctx = getContext();
-  if (!ctx) return false;
+  if (!ctx) {
+    const ok = playHtmlFallback();
+    if (!ok && queueOnBlock) {
+      pendingPlay = () => {
+        void withAudio(play, false);
+      };
+    }
+    return ok;
+  }
   try {
     if (ctx.state === "suspended") {
       await ctx.resume();
-      // Still suspended = browser blocked us — no silent fail.
-      if (ctx.state === "suspended") return false;
+    }
+    if (ctx.state !== "running") {
+      const htmlOk = playHtmlFallback();
+      if (!htmlOk && queueOnBlock) {
+        pendingPlay = () => {
+          void withAudio(play, false);
+        };
+      }
+      return htmlOk;
     }
     unlocked = true;
-    play(ctx, ctx.currentTime + 0.02);
+    play(ctx, ctx.currentTime + 0.01);
     return true;
   } catch {
-    return false;
+    const htmlOk = playHtmlFallback();
+    if (!htmlOk && queueOnBlock) {
+      pendingPlay = () => {
+        void withAudio(play, false);
+      };
+    }
+    return htmlOk;
   }
 }
 
 /** Cash-register win. */
 export function playWinSound(): void {
   void withAudio((ctx, now) => {
-    tone(ctx, 1046, now, 0.2, 0.35, "sine");
-    tone(ctx, 1568, now + 0.12, 0.45, 0.4, "sine");
-    tone(ctx, 2093, now + 0.12, 0.35, 0.22, "sine");
+    tone(ctx, 1046, now, 0.2, 0.45, "sine");
+    tone(ctx, 1568, now + 0.12, 0.45, 0.5, "sine");
+    tone(ctx, 2093, now + 0.12, 0.35, 0.3, "sine");
   });
 }
 
 /** Digits Good / Trade now — loud triple beep, hard to miss. */
 export function playGoodSetupSound(): void {
   void withAudio((ctx, now) => {
-    // Three bright square beeps + high ring
-    tone(ctx, 880, now, 0.18, 0.55, "square");
-    tone(ctx, 1175, now + 0.2, 0.2, 0.55, "square");
-    tone(ctx, 1568, now + 0.42, 0.35, 0.6, "square");
-    tone(ctx, 2349, now + 0.42, 0.4, 0.28, "sine");
-    // Repeat once so it cuts through
-    tone(ctx, 880, now + 0.9, 0.16, 0.5, "square");
-    tone(ctx, 1568, now + 1.1, 0.4, 0.55, "square");
+    tone(ctx, 880, now, 0.2, 0.72, "square");
+    tone(ctx, 1175, now + 0.2, 0.22, 0.72, "square");
+    tone(ctx, 1568, now + 0.44, 0.4, 0.78, "square");
+    tone(ctx, 2349, now + 0.44, 0.45, 0.4, "sine");
+    tone(ctx, 880, now + 0.95, 0.18, 0.68, "square");
+    tone(ctx, 1568, now + 1.15, 0.45, 0.72, "square");
+  }).then((ok) => {
+    if (!ok) playHtmlFallback();
   });
   try {
     if (typeof navigator !== "undefined" && "vibrate" in navigator) {
@@ -138,19 +286,31 @@ export function playGoodSetupSound(): void {
 /** Almost — two soft beeps. */
 export function playAlmostSetupSound(): void {
   void withAudio((ctx, now) => {
-    tone(ctx, 740, now, 0.14, 0.35, "square");
-    tone(ctx, 988, now + 0.16, 0.22, 0.4, "square");
+    tone(ctx, 740, now, 0.14, 0.4, "square");
+    tone(ctx, 988, now + 0.16, 0.22, 0.48, "square");
   });
 }
 
 /** Loss thud. */
 export function playLossSound(): void {
   void withAudio((ctx, now) => {
-    tone(ctx, 220, now, 0.35, 0.45, "triangle");
-    tone(ctx, 110, now + 0.05, 0.4, 0.35, "sine");
+    tone(ctx, 220, now, 0.35, 0.55, "triangle");
+    tone(ctx, 110, now + 0.05, 0.4, 0.45, "sine");
   });
 }
 
 export function isAudioUnlocked(): boolean {
   return unlocked;
+}
+
+/** Resume after tab sleep if we already unlocked once. */
+export function resumeAudioIfNeeded(): void {
+  if (!enabled || !unlocked) return;
+  const ctx = getContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    void ctx.resume().then(() => {
+      if (ctx.state === "running") flushPending();
+    });
+  }
 }

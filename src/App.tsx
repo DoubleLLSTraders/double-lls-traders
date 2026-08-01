@@ -59,7 +59,7 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { storageKey } from "./lib/platform";
-import { unlockAudio } from "./lib/sound";
+import { resumeAudioIfNeeded, unlockAudio } from "./lib/sound";
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
@@ -440,6 +440,26 @@ export default function App() {
     analyzerBuyNowRef.current = false;
     setAnalyzerDirective(null);
   }, [symbol]);
+
+  // Production browsers mute until a gesture — prime on first tap, resume on tab focus.
+  useEffect(() => {
+    const onGesture = () => {
+      unlockAudio();
+      window.removeEventListener("pointerdown", onGesture, true);
+      window.removeEventListener("keydown", onGesture, true);
+    };
+    window.addEventListener("pointerdown", onGesture, true);
+    window.addEventListener("keydown", onGesture, true);
+    const onVis = () => {
+      if (document.visibilityState === "visible") resumeAudioIfNeeded();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pointerdown", onGesture, true);
+      window.removeEventListener("keydown", onGesture, true);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
 
   // Keep Mode cards + prediction locked to the live market pick when auto-side is on.
   useEffect(() => {

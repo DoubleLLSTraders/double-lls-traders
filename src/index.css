@@ -1705,7 +1705,15 @@ html[data-theme="light"] .workspace__flag {
   gap: 12px;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-items: stretch;
+}
+
+.workspace__side > * {
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .workspace__bot {
@@ -1839,21 +1847,23 @@ html[data-theme="light"] .split-layout__handle:focus-visible {
 }
 
 .brand-stamp {
-  flex: 1;
+  flex: none;
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
-  min-height: 0;
-  padding: 18px;
+  align-items: stretch;
+  margin-top: auto;
+  padding: 14px 16px;
   border-radius: 12px;
   background: var(--surface-deeper);
   border: 1px solid var(--line-faint);
+  overflow: hidden;
 }
 
 .brand-stamp__inner {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
-  gap: 14px;
+  gap: 12px;
   width: 100%;
 }
 
@@ -1891,7 +1901,7 @@ html[data-theme="light"] .split-layout__handle:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
 }
 
 .brand-stamp__name {
@@ -1927,11 +1937,12 @@ html[data-theme="light"] .split-layout__handle:focus-visible {
 .brand-stamp__disclaimer {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 400;
-  line-height: 1.55;
+  line-height: 1.5;
   color: var(--muted-dim);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 
 html[data-theme="light"] .brand-stamp {
@@ -2346,13 +2357,50 @@ html[data-theme="light"] .digit-tile__tip {
 
 .digit-map__pulse-main {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
-  align-items: baseline;
-  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "dot label sound"
+    "dot detail detail";
+  align-items: center;
+  gap: 6px 8px;
   margin-bottom: 8px;
 }
 
+.digit-map__pulse-dot {
+  grid-area: dot;
+  align-self: start;
+  margin-top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.digit-map__pulse-main strong {
+  grid-area: label;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.digit-map__pulse-main em {
+  grid-area: detail;
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.35;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .digit-map__alert-btn {
+  grid-area: sound;
+  justify-self: end;
   border: 1px solid color-mix(in srgb, var(--digit-high) 45%, var(--line-faint));
   background: color-mix(in srgb, var(--digit-high) 18%, var(--surface));
   color: var(--digit-high);
@@ -2370,29 +2418,25 @@ html[data-theme="light"] .digit-tile__tip {
   background: color-mix(in srgb, var(--digit-high) 28%, var(--surface));
 }
 
-.digit-map__pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--muted);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 22%, transparent);
+.digit-map__alert-btn--need {
+  border-color: color-mix(in srgb, #f0c14b 55%, var(--line-faint));
+  background: color-mix(in srgb, #f0c14b 22%, var(--surface));
+  color: #f0c14b;
+  animation: sound-need-pulse 1.4s ease-in-out infinite;
 }
 
-.digit-map__pulse-main strong {
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 750;
-  letter-spacing: -0.02em;
-  color: var(--text);
+.digit-map__alert-btn--on {
+  border-color: color-mix(in srgb, var(--digit-high) 55%, var(--line-faint));
 }
 
-.digit-map__pulse-main em {
-  font-style: normal;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.35;
-  min-width: 0;
+@keyframes sound-need-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, #f0c14b 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, #f0c14b 0%, transparent);
+  }
 }
 
 .digit-map__pulse--good {
@@ -6244,6 +6288,16 @@ html[data-theme="light"] .tick-chart__tip {
 
   .workspace__chart {
     max-height: min(58vh, 760px);
+  }
+
+  .workspace__side .brand-stamp__inner {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
+
+  .workspace__side .brand-stamp__logo {
+    width: 44px;
+    height: 44px;
   }
 
   .ai-shell__split {

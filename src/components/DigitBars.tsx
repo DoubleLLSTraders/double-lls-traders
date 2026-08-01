@@ -7,7 +7,11 @@ import {
 } from "../lib/analysis/marketPulse";
 import type { AnalyzerDirective } from "../lib/analysis/analyzerDirector";
 import type { MarketSignal } from "../lib/analysis/signal";
-import { playGoodSetupSound, unlockAudio } from "../lib/sound";
+import {
+  isAudioUnlocked,
+  playGoodSetupSound,
+  unlockAudio,
+} from "../lib/sound";
 
 type Tone = "high" | "second" | "low" | "neutral";
 
@@ -112,6 +116,7 @@ export function DigitBars({
   }, [basePulse, director, requirements, signal]);
   const alertKeyRef = useRef("");
   const symbolAlertRef = useRef(symbol);
+  const [soundReady, setSoundReady] = useState(() => isAudioUnlocked());
 
   // Sound only when Digits shows Trade now (desk may buy).
   useEffect(() => {
@@ -136,7 +141,7 @@ export function DigitBars({
     const key = `${symbol}|trade-now|${digit}`;
     if (alertKeyRef.current === key) return;
     alertKeyRef.current = key;
-    void playGoodSetupSound();
+    playGoodSetupSound();
   }, [
     pulse.mood,
     pulse.label,
@@ -262,14 +267,21 @@ export function DigitBars({
           <em>{pulse.detail}</em>
           <button
             type="button"
-            className="digit-map__alert-btn"
-            title="Enable browser sound (required once)"
+            className={`digit-map__alert-btn${
+              soundReady ? " digit-map__alert-btn--on" : " digit-map__alert-btn--need"
+            }`}
+            title={
+              soundReady
+                ? "Sound on — tap to test"
+                : "Tap once to enable browser sound (required)"
+            }
             onClick={() => {
               unlockAudio();
               playGoodSetupSound();
+              setSoundReady(true);
             }}
           >
-            🔔 Sound
+            {soundReady ? "🔔 Sound on" : "🔔 Tap for sound"}
           </button>
         </div>
         <div className="digit-map__legend">
