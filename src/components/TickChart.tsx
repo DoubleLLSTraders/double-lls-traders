@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useTheme } from "../hooks/useTheme";
 import type { Tick } from "../lib/deriv/types";
 import { marketLabel } from "./MarketSelect";
@@ -55,14 +55,41 @@ export function TickChart({
   const { theme } = useTheme();
   const gradId = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const [windowSize, setWindowSize] = useState(maxPoints);
+  const [frameSize, setFrameSize] = useState({ width: 1200, height: 420 });
   const [hover, setHover] = useState<HoverState | null>(null);
   const series = ticks.slice(-windowSize);
 
+  useEffect(() => {
+    const node = frameRef.current;
+    if (!node) return;
+
+    const sync = () => {
+      const { width, height } = node.getBoundingClientRect();
+      const w = Math.round(width);
+      const h = Math.round(height);
+      if (w <= 0 || h <= 0) return;
+      setFrameSize((prev) =>
+        prev.width === w && prev.height === h ? prev : { width: w, height: h },
+      );
+    };
+
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   const chart = useMemo(() => {
-    const width = 1200;
-    const height = 420;
-    const pad = { top: 20, right: 78, bottom: 34, left: 12 };
+    const width = Math.max(320, frameSize.width);
+    const height = Math.max(240, frameSize.height);
+    const pad = {
+      top: 20,
+      right: 78,
+      bottom: 34,
+      left: 12,
+    };
 
     if (series.length < 2) {
       return {
@@ -162,7 +189,7 @@ export function TickChart({
       plotTop: pad.top,
       plotLeft: pad.left,
     };
-  }, [series, tradeMarkers]);
+  }, [series, tradeMarkers, frameSize]);
 
   const latest = series[series.length - 1];
   const first = series[0];
@@ -306,7 +333,7 @@ export function TickChart({
       </div>
 
       <div className="tick-chart__stage">
-        <div className="tick-chart__frame">
+        <div className="tick-chart__frame" ref={frameRef}>
           {series.length < 2 ? (
             <p className="empty">Waiting for ticks to draw the chart…</p>
           ) : (

@@ -1467,34 +1467,32 @@ export default function App() {
                 <DigitStrip digits={feed.digits} />
               </div>
               <aside className="workspace__side">
-                <div className="workspace__side-main">
-                  <DigitBars
-                    stats={tradeStats}
-                    latestDigit={latest?.digit ?? null}
-                    signal={diffSignal}
-                    director={analyzerDirective}
-                    symbol={symbol}
-                    requirements={{
-                      minColdGap: bot.minColdGap,
-                      minSample: bot.minSample,
-                      maxMomentumGap: bot.maxMomentumGap,
-                      side: bot.side,
-                      volatilityLabel: volatilityTag(symbol),
-                    }}
-                    selectedDigit={
-                      aiOperator.state.armed ? bot.prediction : selectedDigit
-                    }
-                    onSelectDigit={(digit) =>
-                      setSelectedDigit(digit === selectedDigit ? null : digit)
-                    }
-                  />
-                  <StatsPanel
-                    stats={tradeStats}
-                    selectedDigit={
-                      aiOperator.state.armed ? bot.prediction : selectedDigit
-                    }
-                  />
-                </div>
+                <DigitBars
+                  stats={tradeStats}
+                  latestDigit={latest?.digit ?? null}
+                  signal={diffSignal}
+                  director={analyzerDirective}
+                  symbol={symbol}
+                  requirements={{
+                    minColdGap: bot.minColdGap,
+                    minSample: bot.minSample,
+                    maxMomentumGap: bot.maxMomentumGap,
+                    side: bot.side,
+                    volatilityLabel: volatilityTag(symbol),
+                  }}
+                  selectedDigit={
+                    aiOperator.state.armed ? bot.prediction : selectedDigit
+                  }
+                  onSelectDigit={(digit) =>
+                    setSelectedDigit(digit === selectedDigit ? null : digit)
+                  }
+                />
+                <StatsPanel
+                  stats={tradeStats}
+                  selectedDigit={
+                    aiOperator.state.armed ? bot.prediction : selectedDigit
+                  }
+                />
                 <BrandStamp />
               </aside>
             </div>

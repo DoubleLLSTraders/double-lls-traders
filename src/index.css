@@ -1715,24 +1715,19 @@ html[data-theme="light"] .workspace__flag {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  overflow: hidden;
-  align-items: stretch;
-}
-
-.workspace__side-main {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  align-items: stretch;
 }
 
-.workspace__side-main > * {
+.workspace__side > * {
   flex-shrink: 0;
   min-width: 0;
+}
+
+.workspace__side .brand-stamp {
+  margin-top: 4px;
 }
 
 .workspace__side .digit-grid {
@@ -6327,10 +6322,18 @@ html[data-theme="light"] .tick-chart__tip {
     max-height: none;
   }
 
+  .workspace__chart .tick-chart__frame {
+    min-height: clamp(380px, 50vh, 820px);
+  }
+
   .tick-chart__frame,
   .tick-chart__svg {
     max-height: none;
     min-height: 0;
+  }
+
+  .workspace__side .brand-stamp {
+    padding: 10px 12px;
   }
 
   .workspace__side .brand-stamp__inner {
@@ -6388,6 +6391,10 @@ html[data-theme="light"] .tick-chart__tip {
 
   .workspace__body {
     grid-template-columns: minmax(0, 1fr) var(--layout-side);
+  }
+
+  .workspace__chart .tick-chart__frame {
+    min-height: clamp(440px, 56vh, 900px);
   }
 
   .workspace__quote > div > b {
@@ -6554,11 +6561,6 @@ html[data-theme="light"] .tick-chart__tip {
 
   .workspace__side {
     height: auto;
-    overflow: visible;
-  }
-
-  .workspace__side-main {
-    flex: none;
     overflow: visible;
   }
 

@@ -97,7 +97,12 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
     watch: {
-      ignored: ["**/*recovery-codes*", "**/.env", "**/.env.*"],
+      ignored: [
+        "**/*recovery-codes*",
+        "**/.env",
+        "**/.env.*",
+        "**/.deploy-gh-pages/**",
+      ],
     },
   },
 });
