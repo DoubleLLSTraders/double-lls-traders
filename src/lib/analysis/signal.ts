@@ -314,8 +314,8 @@ export function buildMarketSignal(
     options.symbol,
   );
   const timingOk = timingClears(preferredSide, signalGap, maxMomentumGap, minColdGap);
-  // Desk pace: lead≥4 + margin≥1.0pp. Elite lead≥8 starved Digits of Good.
-  const minLead = preferredSide === "DIGITDIFF" ? 4 : 4;
+  // Desk pace: lead≥2 + margin≥0.4pp so cold@8.8% vs 9.2% can reach Good.
+  const minLead = preferredSide === "DIGITDIFF" ? 2 : 4;
   const separationOk = hasClearDigitLead(stats, digit, preferredSide, minLead);
   const barrierAligned = barrierAlignsWithSide(stats, digit, preferredSide);
   const primaryBarrier =
@@ -323,8 +323,9 @@ export function buildMarketSignal(
       ? stats.coldest[0] === digit
       : stats.hottest[0] === digit;
   const windowFair = !stats.uniformity.significant;
+  // 0.4pp — at n=500 a 1.0pp margin left cold@8.8% vs 9.2% stuck on Almost forever.
   const coldMarginOk =
-    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 1.0);
+    preferredSide !== "DIGITDIFF" || coldBarrierMarginOk(stats, digit, 0.4);
   // Only our barrier clears Wilson EV — runner-up in the cold/hot pack must fail.
   const rival =
     preferredSide === "DIGITDIFF"

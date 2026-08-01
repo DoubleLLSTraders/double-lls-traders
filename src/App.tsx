@@ -44,7 +44,12 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { storageKey } from "./lib/platform";
-import { playGoodSetupSound } from "./lib/sound";
+import {
+  playAlmostSetupSound,
+  playGoodSetupSound,
+  unlockAudio,
+} from "./lib/sound";
+import { readMarketPulse } from "./lib/analysis/marketPulse";
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
@@ -687,29 +692,44 @@ export default function App() {
     bot.side,
   ]);
 
-  // Sound when Digits flips to Good / Trade now (once per market arming).
-  const wasAnalyzerGoodRef = useRef(false);
-  const goodSoundSymbolRef = useRef(symbol);
+  // Sound when Digits hits Almost or Good (once each per market).
+  const pulseSoundRef = useRef<"idle" | "almost" | "good">("idle");
+  const pulseSoundSymbolRef = useRef(symbol);
   useEffect(() => {
-    if (goodSoundSymbolRef.current !== symbol) {
-      goodSoundSymbolRef.current = symbol;
-      wasAnalyzerGoodRef.current = false;
+    if (pulseSoundSymbolRef.current !== symbol) {
+      pulseSoundSymbolRef.current = symbol;
+      pulseSoundRef.current = "idle";
     }
-    const good = isDeskTradeReady(signal, {
+    const pulse = readMarketPulse(tradeStats, signal.side === "DIGITDIFF" ? signal : diffSignal, {
       minColdGap: bot.minColdGap,
       minSample: bot.minSample,
       maxMomentumGap: bot.maxMomentumGap,
       side: bot.side,
+      volatilityLabel: volatilityTag(symbol),
     });
-    if (good && !wasAnalyzerGoodRef.current) {
+    if (pulse.mood === "good" && pulseSoundRef.current !== "good") {
       playGoodSetupSound();
       setTimerNote(
         `Good to trade · ${volatilityTag(symbol)} · ${signal.label} · gap ${signal.watching.signalGap ?? "—"}`,
       );
+      pulseSoundRef.current = "good";
+      return;
     }
-    wasAnalyzerGoodRef.current = good;
+    if (
+      pulse.label === "Almost" &&
+      pulseSoundRef.current === "idle"
+    ) {
+      playAlmostSetupSound();
+      pulseSoundRef.current = "almost";
+      return;
+    }
+    if (pulse.mood !== "good" && pulse.label !== "Almost") {
+      pulseSoundRef.current = "idle";
+    }
   }, [
+    tradeStats,
     signal,
+    diffSignal,
     bot.minColdGap,
     bot.minSample,
     bot.maxMomentumGap,
@@ -797,6 +817,9 @@ export default function App() {
       return;
     }
 
+    // Browser only allows audio after a click — unlock here so Good chimes later.
+    unlockAudio();
+    playAlmostSetupSound();
     botHaltRef.current = false;
 
     const botForStart =

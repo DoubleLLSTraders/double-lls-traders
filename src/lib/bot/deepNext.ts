@@ -30,7 +30,7 @@ export interface DeepNextContext {
 
 /** One trade then bank — never press. */
 export const MAX_WINS_BEFORE_BANK = 1;
-const MIN_LEAD_FIRST = 4;
+const MIN_LEAD_FIRST = 2;
 const MIN_LEAD_FOLLOW = 8;
 const MIN_POWER_FOLLOW = 90;
 

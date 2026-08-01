@@ -41,6 +41,13 @@ function audio(): AudioContext | null {
   return context;
 }
 
+/** Call from a click (Start) so later Good alerts are not blocked by the browser. */
+export function unlockAudio(): void {
+  const ctx = audio();
+  if (!ctx) return;
+  if (ctx.state === "suspended") void ctx.resume();
+}
+
 /** A struck-bell partial: sine tone with a percussive exponential decay. */
 function bell(
   ctx: AudioContext,
@@ -106,19 +113,32 @@ export function playWinSound(): void {
 }
 
 /**
- * Analyzer found Digits Good / Trade now — short ascending alert so the desk
- * notices before the buy lands.
+ * Analyzer found Digits Good / Trade now — louder ascending alert so it is
+ * hard to miss before the buy lands.
  */
 export function playGoodSetupSound(): void {
   if (!enabled) return;
   const ctx = audio();
   if (!ctx) return;
+  void ctx.resume();
   const now = ctx.currentTime + 0.01;
 
-  bell(ctx, 784.0, now, 0.18, 0.22);
-  bell(ctx, 988.0, now + 0.08, 0.22, 0.26);
-  bell(ctx, 1318.5, now + 0.18, 0.45, 0.28);
-  bell(ctx, 1976.0, now + 0.18, 0.35, 0.12);
+  rattle(ctx, now, 0.07, 0.16);
+  bell(ctx, 880.0, now, 0.22, 0.38);
+  bell(ctx, 1174.7, now + 0.1, 0.28, 0.42);
+  bell(ctx, 1568.0, now + 0.22, 0.55, 0.45);
+  bell(ctx, 2349.3, now + 0.22, 0.4, 0.2);
+}
+
+/** Setup is close (Almost) — softer two-tone ping. */
+export function playAlmostSetupSound(): void {
+  if (!enabled) return;
+  const ctx = audio();
+  if (!ctx) return;
+  void ctx.resume();
+  const now = ctx.currentTime + 0.01;
+  bell(ctx, 740.0, now, 0.16, 0.28);
+  bell(ctx, 988.0, now + 0.1, 0.28, 0.32);
 }
 
 /** Loss: a short pitch-drop thud, like a coin falling away. */
