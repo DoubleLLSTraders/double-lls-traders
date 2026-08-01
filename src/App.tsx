@@ -44,6 +44,7 @@ import {
   planLiveStake,
 } from "./lib/bot/liveProfile";
 import { storageKey } from "./lib/platform";
+import { playGoodSetupSound } from "./lib/sound";
 import { config, isConfigured } from "./lib/config";
 import logoDark from "./assets/logo.png";
 import logoLight from "./assets/logo-light.png";
@@ -647,19 +648,28 @@ export default function App() {
     void autoPickMarket(`${symbol} low payout · auto-switching market…`);
   }, [bot.running, symbol, feed.client, feed.state, autoPickMarket]);
 
-  // While hunting, keep rotating volatility so analyze stays live. Idle stays
-  // on the user's market — only the bot hop changes index.
+  // Hunting: if Digits is not Good, leave this volatility fast and search.
   useEffect(() => {
     if (!bot.running || scanningMarket || arm.arming) return;
     if (!feed.client || feed.state !== "ready") return;
+    if (paper.session.open || paper.orderPending) return;
+
+    const good = isDeskTradeReady(signal, {
+      minColdGap: bot.minColdGap,
+      minSample: bot.minSample,
+      maxMomentumGap: bot.maxMomentumGap,
+      side: bot.side,
+    });
+    if (good) return;
+
     const id = window.setInterval(() => {
       if (marketSwitchBusy.current || switchHoldRef.current) return;
       if (paper.session.open || paper.orderPending) return;
-      void autoPickMarket("Live analyze · next volatility…", {
+      void autoPickMarket("Bad / Almost · searching next volatility…", {
         preferReady: true,
         excludeCurrent: true,
       });
-    }, 25000);
+    }, 8000);
     return () => window.clearInterval(id);
   }, [
     bot.running,
@@ -670,6 +680,41 @@ export default function App() {
     autoPickMarket,
     paper.session.open,
     paper.orderPending,
+    signal,
+    bot.minColdGap,
+    bot.minSample,
+    bot.maxMomentumGap,
+    bot.side,
+  ]);
+
+  // Sound when Digits flips to Good / Trade now (once per market arming).
+  const wasAnalyzerGoodRef = useRef(false);
+  const goodSoundSymbolRef = useRef(symbol);
+  useEffect(() => {
+    if (goodSoundSymbolRef.current !== symbol) {
+      goodSoundSymbolRef.current = symbol;
+      wasAnalyzerGoodRef.current = false;
+    }
+    const good = isDeskTradeReady(signal, {
+      minColdGap: bot.minColdGap,
+      minSample: bot.minSample,
+      maxMomentumGap: bot.maxMomentumGap,
+      side: bot.side,
+    });
+    if (good && !wasAnalyzerGoodRef.current) {
+      playGoodSetupSound();
+      setTimerNote(
+        `Good to trade · ${volatilityTag(symbol)} · ${signal.label} · gap ${signal.watching.signalGap ?? "—"}`,
+      );
+    }
+    wasAnalyzerGoodRef.current = good;
+  }, [
+    signal,
+    bot.minColdGap,
+    bot.minSample,
+    bot.maxMomentumGap,
+    bot.side,
+    symbol,
   ]);
 
   const displayBalance =

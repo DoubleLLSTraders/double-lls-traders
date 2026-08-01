@@ -105,6 +105,22 @@ export function playWinSound(): void {
   bell(ctx, 2793.83, now + 0.13, 0.45, 0.09);
 }
 
+/**
+ * Analyzer found Digits Good / Trade now — short ascending alert so the desk
+ * notices before the buy lands.
+ */
+export function playGoodSetupSound(): void {
+  if (!enabled) return;
+  const ctx = audio();
+  if (!ctx) return;
+  const now = ctx.currentTime + 0.01;
+
+  bell(ctx, 784.0, now, 0.18, 0.22);
+  bell(ctx, 988.0, now + 0.08, 0.22, 0.26);
+  bell(ctx, 1318.5, now + 0.18, 0.45, 0.28);
+  bell(ctx, 1976.0, now + 0.18, 0.35, 0.12);
+}
+
 /** Loss: a short pitch-drop thud, like a coin falling away. */
 export function playLossSound(): void {
   if (!enabled) return;

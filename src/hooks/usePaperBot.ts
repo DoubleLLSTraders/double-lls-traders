@@ -805,15 +805,15 @@ export function usePaperBot(options: {
             setLog((lines) => pushLog(lines, deep.reason));
           }
           stuckSkipsRef.current += 1;
-          // Rotate volatility instead of sitting on one dead tape.
-          if (stuckSkipsRef.current >= 12) {
+          // Bad / Almost tape — hop volatility quickly (don't sit on one index).
+          if (stuckSkipsRef.current >= 5) {
             stuckSkipsRef.current = 0;
             if (onSwitchMarketRef.current) {
-              setWaitReason("Rotating volatility · fresh analyze…");
+              setWaitReason("Market slow · searching next volatility…");
               setLog((lines) =>
-                pushLog(lines, "ROTATE · hunting next volatility"),
+                pushLog(lines, "ROTATE · bad market · next volatility"),
               );
-              onSwitchMarketRef.current("Hunting · rotating volatility…");
+              onSwitchMarketRef.current("Bad market · searching next volatility…");
             } else {
               onStopRef.current("Deep · first setup never armed · stopped");
               setLog((lines) =>
@@ -853,28 +853,26 @@ export function usePaperBot(options: {
           return;
         }
 
-        const qualitySkip =
-          gate.reason.startsWith("Skip · cold gap") ||
-          gate.reason.startsWith("Skip · momentum gap") ||
-          gate.reason.startsWith("Skip · EV") ||
-          gate.reason.startsWith("Skip · Differs") ||
-          gate.reason.startsWith("Skip · Matches") ||
-          gate.reason.startsWith("Skip · cold barrier") ||
-          gate.reason.startsWith("Skip · confidence") ||
-          gate.reason.startsWith("Skip · confirms");
-        if (qualitySkip) {
+        // Analyzer / Almost / Building holds must rotate — including "Skip · gap"
+        // and "Skip · cold lead" which used to never increment the stuck counter.
+        const holdSkip =
+          !gate.reason.startsWith("Skip · max") &&
+          !gate.reason.startsWith("Skip · drawdown") &&
+          !gate.reason.startsWith("Skip · balance") &&
+          !gate.reason.startsWith("Wait · re-backing");
+        if (holdSkip) {
           stuckSkipsRef.current += 1;
         } else {
           stuckSkipsRef.current = 0;
         }
-        if (stuckSkipsRef.current >= 12) {
+        if (stuckSkipsRef.current >= 5) {
           stuckSkipsRef.current = 0;
           if (onSwitchMarketRef.current) {
-            setWaitReason("Rotating volatility · fresh analyze…");
+            setWaitReason("Market slow · searching next volatility…");
             setLog((lines) =>
-              pushLog(lines, "ROTATE · hunting next volatility"),
+              pushLog(lines, "ROTATE · bad market · next volatility"),
             );
-            onSwitchMarketRef.current("Hunting · rotating volatility…");
+            onSwitchMarketRef.current("Bad market · searching next volatility…");
           } else {
             onStopRef.current("Deep · first setup never cleared · stopped");
             setLog((lines) =>
@@ -927,6 +925,12 @@ export function usePaperBot(options: {
         setWaitReason(tape.reason.replace(/^Analyzer ·/, "Wait ·"));
         if (nextSession.skipped % 5 === 1) {
           setLog((lines) => pushLog(lines, tape.reason));
+        }
+        stuckSkipsRef.current += 1;
+        if (stuckSkipsRef.current >= 5 && onSwitchMarketRef.current) {
+          stuckSkipsRef.current = 0;
+          setWaitReason("Market faded · searching next volatility…");
+          onSwitchMarketRef.current("Faded Good · searching next volatility…");
         }
         return;
       }
