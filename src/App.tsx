@@ -4,7 +4,7 @@ import { AnalyzerPopup } from "./components/AnalyzerPopup";
 import { BotPanel, type BotSettings } from "./components/BotPanel";
 import { DigitBars } from "./components/DigitBars";
 import { DigitStrip } from "./components/DigitStrip";
-import { MarketSelect } from "./components/MarketSelect";
+import { MarketSelect, volatilityTag } from "./components/MarketSelect";
 import { StatsPanel } from "./components/StatsPanel";
 import { BrandStamp } from "./components/BrandStamp";
 import { SettingsModal, type SettingsTab } from "./components/SettingsModal";
@@ -25,6 +25,7 @@ import { useTheme } from "./hooks/useTheme";
 import { summarise } from "./lib/analysis/digits";
 import {
   buildMarketSignal,
+  isArmedSignal,
   pickBetterSignal,
   type ContractSide,
 } from "./lib/analysis/signal";
@@ -762,105 +763,141 @@ export default function App() {
     scanActiveRef.current = true;
     if (!fromOperator) setMenu("market");
 
-    setScanningMarket(true);
-    setTimerNote(
-      fromOperator
-        ? "AI Operator · scanning markets…"
-        : "Scanning markets for best setup…",
-    );
+    // If Digits already shows Trade now / Good on this volatility, Start uses
+    // that live state — do not scan away from an armed setup.
+    const liveNow = signalRef.current;
+    const useLiveGood =
+      !fromOperator &&
+      feed.state === "ready" &&
+      isArmedSignal(liveNow) &&
+      (botForStart.side === "DIGITDIFF"
+        ? liveNow.side === "DIGITDIFF"
+        : botForStart.autoSide || liveNow.side === botForStart.side);
 
-    try {
-      if (feed.client && feed.state === "ready") {
-        const scanBot = fromOperator
-          ? { ...botForStart, sidePreference: "matches" as const }
-          : {
-              ...botForStart,
-              sidePreference:
-                botForStart.side === "DIGITDIFF"
-                  ? ("differs" as const)
-                  : ("matches" as const),
-            };
-        // Prefer an already-armed market so Start does not land on a soft
-        // setup the live elite gates will never fire.
-        const best = await findBestMarket(feed.client, scanBot, symbol, {
-          preferReady: !fromOperator,
-        });
-        if (!scanActiveRef.current) return;
-        const side = fromOperator
-          ? ("DIGITMATCH" as const)
-          : bot.autoSide
-            ? best.signal.side
-            : botForStart.side;
-        const digit =
-          fromOperator && best.signal.side !== "DIGITMATCH"
-            ? bot.prediction
-            : best.signal.digit;
-        startSignalRef.current = {
-          side,
-          digit,
-          label: fromOperator ? `Matches ${digit}` : best.signal.label,
-        };
-        setBot((current) => ({
-          ...current,
-          ...botForStart,
-          side,
-          prediction: digit,
-          autoFollow: true,
-          autoSide: fromOperator ? false : current.autoSide,
-          ...(fromOperator
-            ? {
-                sidePreference: "matches" as const,
-                martingale: false,
-                requireFullConfirm: false,
-                requireMultiWindow: false,
-                requireWindowsEv: false,
-                requireUneven: false,
-                requireTiming: true,
-                stake: Math.min(current.stake, 0.35),
-                contracts: 1,
-                cooldownTicks: Math.max(current.cooldownTicks, 8),
-                maxTradesPerHour: Math.min(current.maxTradesPerHour || 60, 20),
-                minSample: Math.min(current.minSample, 500),
-              }
-            : {}),
-        }));
-        const pickedSymbol = best.symbol;
-        if (pickedSymbol !== symbol) {
-          switchHoldRef.current = true;
-          setSymbol(pickedSymbol);
-          setTimerNote(`Switching to ${best.name} · loading live ticks…`);
-          const feedReady = await waitForSymbolFeed(
-            pickedSymbol,
-            botForStart.minSample,
-            () => feedSnapshotRef.current,
-            () => !scanActiveRef.current,
-          );
-          switchHoldRef.current = false;
-          if (!scanActiveRef.current) return;
-          if (!feedReady) {
-            setTimerNote(
-              `${best.name} · live feed not ready · start cancelled (no blind trade)`,
-            );
-            scanActiveRef.current = false;
-            setScanningMarket(false);
-            return;
-          }
-        }
-        setTimerNote(
-          fromOperator
-            ? `AI · ${best.name} · Matches ${digit}`
-            : `Best · ${best.name} · ${best.signal.label}`,
-        );
-      } else if (scanActiveRef.current) {
-        feedAnalyzerToBot();
-        setTimerNote("Using current market · feed not ready for full scan");
-      }
-    } catch {
-      if (!scanActiveRef.current) return;
-      feedAnalyzerToBot();
-      setTimerNote("Market scan skipped · using current symbol");
-    } finally {
+    if (useLiveGood) {
+      const side = bot.autoSide ? liveNow.side : botForStart.side;
+      const digit = liveNow.digit;
+      startSignalRef.current = {
+        side,
+        digit,
+        label: liveNow.label,
+      };
+      setBot((current) => ({
+        ...current,
+        ...botForStart,
+        side,
+        prediction: digit,
+        autoFollow: true,
+        autoSide: current.autoSide,
+      }));
       setScanningMarket(false);
+      scanActiveRef.current = true;
+      setTimerNote(
+        `Using live good · ${volatilityTag(symbol)} · ${liveNow.label} · gap ${liveNow.watching.signalGap ?? "—"}`,
+      );
+    } else {
+      setScanningMarket(true);
+      setTimerNote(
+        fromOperator
+          ? "AI Operator · scanning markets…"
+          : "Scanning for good volatility (armed gap + sample)…",
+      );
+
+      try {
+        if (feed.client && feed.state === "ready") {
+          const scanBot = fromOperator
+            ? { ...botForStart, sidePreference: "matches" as const }
+            : {
+                ...botForStart,
+                sidePreference:
+                  botForStart.side === "DIGITDIFF"
+                    ? ("differs" as const)
+                    : ("matches" as const),
+              };
+          // Prefer an already-armed market so Start lands on good volatility.
+          const best = await findBestMarket(feed.client, scanBot, symbol, {
+            preferReady: !fromOperator,
+          });
+          if (!scanActiveRef.current) return;
+          const side = fromOperator
+            ? ("DIGITMATCH" as const)
+            : bot.autoSide
+              ? best.signal.side
+              : botForStart.side;
+          const digit =
+            fromOperator && best.signal.side !== "DIGITMATCH"
+              ? bot.prediction
+              : best.signal.digit;
+          startSignalRef.current = {
+            side,
+            digit,
+            label: fromOperator ? `Matches ${digit}` : best.signal.label,
+          };
+          setBot((current) => ({
+            ...current,
+            ...botForStart,
+            side,
+            prediction: digit,
+            autoFollow: true,
+            autoSide: fromOperator ? false : current.autoSide,
+            ...(fromOperator
+              ? {
+                  sidePreference: "matches" as const,
+                  martingale: false,
+                  requireFullConfirm: false,
+                  requireMultiWindow: false,
+                  requireWindowsEv: false,
+                  requireUneven: false,
+                  requireTiming: true,
+                  stake: Math.min(current.stake, 0.35),
+                  contracts: 1,
+                  cooldownTicks: Math.max(current.cooldownTicks, 8),
+                  maxTradesPerHour: Math.min(current.maxTradesPerHour || 60, 20),
+                  minSample: Math.min(current.minSample, 500),
+                }
+              : {}),
+          }));
+          const pickedSymbol = best.symbol;
+          if (pickedSymbol !== symbol) {
+            switchHoldRef.current = true;
+            setSymbol(pickedSymbol);
+            setTimerNote(
+              `Good vol · ${best.name} · loading live ticks…`,
+            );
+            const feedReady = await waitForSymbolFeed(
+              pickedSymbol,
+              botForStart.minSample,
+              () => feedSnapshotRef.current,
+              () => !scanActiveRef.current,
+            );
+            switchHoldRef.current = false;
+            if (!scanActiveRef.current) return;
+            if (!feedReady) {
+              setTimerNote(
+                `${best.name} · live feed not ready · start cancelled (no blind trade)`,
+              );
+              scanActiveRef.current = false;
+              setScanningMarket(false);
+              return;
+            }
+          }
+          const readyTag = isArmedSignal(best.signal) ? "Good" : "Best";
+          setTimerNote(
+            fromOperator
+              ? `AI · ${best.name} · Matches ${digit}`
+              : `${readyTag} · ${volatilityTag(best.symbol)} · ${best.signal.label}`,
+          );
+        } else if (scanActiveRef.current) {
+          feedAnalyzerToBot();
+          setTimerNote("Using current market · feed not ready for full scan");
+        }
+      } catch {
+        if (!scanActiveRef.current) return;
+        feedAnalyzerToBot();
+        setTimerNote("Market scan skipped · using current symbol");
+      } finally {
+        setScanningMarket(false);
+      }
     }
 
     if (!scanActiveRef.current) return;
@@ -886,6 +923,7 @@ export default function App() {
     handleStopTrade,
     scanningMarket,
     symbol,
+    isVirtualAccount,
   ]);
 
   const aiOperator = useAiOperator({
@@ -1253,6 +1291,11 @@ export default function App() {
                   stats={tradeStats}
                   latestDigit={latest?.digit ?? null}
                   signal={diffSignal}
+                  requirements={{
+                    minColdGap: bot.minColdGap,
+                    minSample: bot.minSample,
+                    volatilityLabel: volatilityTag(symbol),
+                  }}
                   selectedDigit={
                     aiOperator.state.armed ? bot.prediction : selectedDigit
                   }

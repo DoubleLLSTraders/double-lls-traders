@@ -2404,6 +2404,16 @@ html[data-theme="light"] .digit-tile__tip {
   color: var(--digit-low);
 }
 
+.digit-map__legend-need {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.digit-map__pulse--good .digit-map__legend-need {
+  color: var(--digit-high);
+}
+
 .digit-map__legend-live {
   margin-left: auto;
   color: var(--green-bright);

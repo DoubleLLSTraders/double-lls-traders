@@ -3,10 +3,26 @@ import { isArmedSignal, type MarketSignal } from "./signal";
 
 export type MarketMood = "loading" | "good" | "watch" | "bounce" | "flat" | "bad";
 
+export interface PulseRequirements {
+  /** Differs cold-gap floor the bot needs before timing clears. */
+  minColdGap: number;
+  /** Sample size floor for high/armed. */
+  minSample: number;
+  /** Short market label, e.g. "V75". */
+  volatilityLabel?: string;
+}
+
 export interface MarketPulse {
   mood: MarketMood;
   label: string;
   detail: string;
+  /** What “good / Trade now” requires — shown under the mood strip. */
+  need: string;
+}
+
+export function formatPulseNeed(req: PulseRequirements): string {
+  const vol = req.volatilityLabel ? ` · ${req.volatilityLabel}` : "";
+  return `Good needs gap≥${req.minColdGap} · n≥${req.minSample}${vol}`;
 }
 
 /**
@@ -17,7 +33,17 @@ export interface MarketPulse {
 export function readMarketPulse(
   stats: DigitStats,
   signal?: MarketSignal | null,
+  requirements?: PulseRequirements,
 ): MarketPulse {
+  const need = formatPulseNeed(
+    requirements ?? { minColdGap: 14, minSample: 1500 },
+  );
+  const withNeed = (
+    mood: MarketMood,
+    label: string,
+    detail: string,
+  ): MarketPulse => ({ mood, label, detail, need });
+
   const {
     sampleSize,
     percentages,
@@ -30,11 +56,7 @@ export function readMarketPulse(
   } = stats;
 
   if (sampleSize < 50) {
-    return {
-      mood: "loading",
-      label: "Loading",
-      detail: `Collecting ticks (${sampleSize}/50)`,
-    };
+    return withNeed("loading", "Loading", `Collecting ticks (${sampleSize}/50)`);
   }
 
   const cold = coldest[0];
@@ -47,6 +69,7 @@ export function readMarketPulse(
   const countLead = (counts[rival] ?? 0) - (counts[cold] ?? 0);
   const marginPp = rivalPct - coldPct;
   const spread = hotPct - coldPct;
+  const minGap = requirements?.minColdGap ?? 14;
 
   const signalGap = signal?.watching.signalGap ?? coldGap;
   const signalDigit = signal?.digit ?? cold;
@@ -56,11 +79,11 @@ export function readMarketPulse(
   // ── Only claim ready when the bot gates can pass ─────────────────────
 
   if (differs && isArmedSignal(differs)) {
-    return {
-      mood: "good",
-      label: "Trade now",
-      detail: `Differs ${differs.digit} · gap ${signalGap ?? "—"} · ${differs.digitPercent.toFixed(1)}% · power ${differs.power}`,
-    };
+    return withNeed(
+      "good",
+      "Trade now",
+      `Differs ${differs.digit} · gap ${signalGap ?? "—"} · ${differs.digitPercent.toFixed(1)}% · power ${differs.power}`,
+    );
   }
 
   if (
@@ -70,11 +93,11 @@ export function readMarketPulse(
     differs.evOk &&
     differs.barrierAligned
   ) {
-    return {
-      mood: "good",
-      label: "Good market",
-      detail: `Cold ${differs.digit} armed path · gap ${signalGap} · power ${differs.power}`,
-    };
+    return withNeed(
+      "good",
+      "Good market",
+      `Cold ${differs.digit} armed path · gap ${signalGap} · power ${differs.power}`,
+    );
   }
 
   if (
@@ -86,11 +109,11 @@ export function readMarketPulse(
     differs.structureOk &&
     (signalGap ?? 0) >= 4
   ) {
-    return {
-      mood: "watch",
-      label: "Almost",
-      detail: `Differs ${differs.digit} · ${differs.confidence} · power ${differs.power} · need high/armed`,
-    };
+    return withNeed(
+      "watch",
+      "Almost",
+      `Differs ${differs.digit} · ${differs.confidence} · power ${differs.power} · need high/armed`,
+    );
   }
 
   if (
@@ -99,14 +122,13 @@ export function readMarketPulse(
     differs.barrierAligned &&
     (signalGap ?? 0) >= 4
   ) {
-    return {
-      mood: "watch",
-      label: "Building",
-      detail: `Differs ${differs.digit} · gap ${signalGap} · ${differs.confidence} · power ${differs.power} · waiting EV/confirms`,
-    };
+    return withNeed(
+      "watch",
+      "Building",
+      `Differs ${differs.digit} · gap ${signalGap} · ${differs.confidence} · power ${differs.power} · waiting EV/confirms`,
+    );
   }
 
-  // Practical cold forming — watch, not "good" (bot will not fire on this alone).
   if (
     coldGap !== null &&
     coldGap >= 5 &&
@@ -114,92 +136,88 @@ export function readMarketPulse(
     coldPct <= 9.5 &&
     sampleSize >= 100
   ) {
-    return {
-      mood: "watch",
-      label: "Building",
-      detail: `Cold ${cold} · ${coldPct.toFixed(1)}% · gap ${coldGap} · lead ${countLead} ticks`,
-    };
+    return withNeed(
+      "watch",
+      "Building",
+      `Cold ${cold} · ${coldPct.toFixed(1)}% · gap ${coldGap}/${minGap} · lead ${countLead}`,
+    );
   }
 
   // ── Bounce / reset ───────────────────────────────────────────────────
 
   if (coldGap === 0) {
-    return {
-      mood: "bounce",
-      label: "Resetting",
-      detail: `Cold ${cold} just printed · wait for gap`,
-    };
+    return withNeed(
+      "bounce",
+      "Resetting",
+      `Cold ${cold} just printed · need gap≥${minGap}`,
+    );
   }
 
   if (currentStreak.length >= 5) {
-    return {
-      mood: "bounce",
-      label: "Sticky",
-      detail: `${currentStreak.digit}×${currentStreak.length} · wait for the streak to break`,
-    };
+    return withNeed(
+      "bounce",
+      "Sticky",
+      `${currentStreak.digit}×${currentStreak.length} · wait for the streak to break`,
+    );
   }
 
   if (countLead === 0 && coldGap !== null && coldGap < 3 && sampleSize >= 100) {
-    return {
-      mood: "bounce",
-      label: "Bouncing",
-      detail: `Cold tie ${cold}/${rival} · gap ${coldGap} · wait for a leader`,
-    };
+    return withNeed(
+      "bounce",
+      "Bouncing",
+      `Cold tie ${cold}/${rival} · gap ${coldGap} · wait for a leader`,
+    );
   }
 
   // ── Building / watch ─────────────────────────────────────────────────
 
-  if (coldGap !== null && coldGap >= 3 && coldGap < 5 && countLead >= 1) {
-    return {
-      mood: "watch",
-      label: "Building",
-      detail: `Cold ${cold} forming · gap ${coldGap} · ${coldPct.toFixed(1)}%`,
-    };
+  if (coldGap !== null && coldGap >= 3 && coldGap < minGap && countLead >= 1) {
+    return withNeed(
+      "watch",
+      "Building",
+      `Cold ${cold} gap ${coldGap}/${minGap} · ${coldPct.toFixed(1)}%`,
+    );
   }
 
   if (coldGap !== null && coldGap < 3) {
-    return {
-      mood: "watch",
-      label: "Warming",
-      detail: `Cold ${cold} gap ${coldGap} · need a few more ticks away`,
-    };
+    return withNeed(
+      "watch",
+      "Warming",
+      `Cold ${cold} gap ${coldGap}/${minGap} · need ${minGap - coldGap} more away`,
+    );
   }
 
-  if (differs && differs.timingOk === false && (signalGap ?? 0) < 4) {
-    return {
-      mood: "watch",
-      label: "Wait",
-      detail: `Gap ${signalGap ?? "—"} on ${signalDigit} · holding for cold`,
-    };
+  if (differs && differs.timingOk === false && (signalGap ?? 0) < minGap) {
+    return withNeed(
+      "watch",
+      "Wait",
+      `Gap ${signalGap ?? "—"}/${minGap} on ${signalDigit} · holding for cold`,
+    );
   }
 
   if (!uniformity.significant && spread < 2.2) {
-    return {
-      mood: "flat",
-      label: "Flat",
-      detail: `Near fair 10% · cold ${cold} @ ${coldPct.toFixed(1)}% · gap ${coldGap ?? "—"}`,
-    };
+    return withNeed(
+      "flat",
+      "Flat",
+      `Near fair 10% · cold ${cold} @ ${coldPct.toFixed(1)}% · gap ${coldGap ?? "—"}/${minGap}`,
+    );
   }
 
   if (uniformity.significant && countLead <= 0 && marginPp < 0.4) {
-    return {
-      mood: "bad",
-      label: "Messy",
-      detail: "Skewed window · no clear cold · stay out",
-    };
+    return withNeed("bad", "Messy", "Skewed window · no clear cold · stay out");
   }
 
   if (countLead >= 1 && coldGap !== null && coldGap >= 3) {
-    return {
-      mood: "watch",
-      label: "Building",
-      detail: `Cold ${cold} · gap ${coldGap} · lead ${countLead} · almost there`,
-    };
+    return withNeed(
+      "watch",
+      "Building",
+      `Cold ${cold} · gap ${coldGap}/${minGap} · lead ${countLead}`,
+    );
   }
 
-  return {
-    mood: "flat",
-    label: "Quiet",
-    detail: `Cold ${cold} @ ${coldPct.toFixed(1)}% · gap ${coldGap ?? "—"} · watching`,
-  };
+  return withNeed(
+    "flat",
+    "Quiet",
+    `Cold ${cold} @ ${coldPct.toFixed(1)}% · gap ${coldGap ?? "—"}/${minGap}`,
+  );
 }

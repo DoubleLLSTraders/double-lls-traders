@@ -17,6 +17,13 @@ export function marketLabel(symbol: string): string {
   return MARKETS.find((market) => market.symbol === symbol)?.name ?? symbol;
 }
 
+/** Compact index tag for Digits / Start notes — e.g. V75 or V50·1s. */
+export function volatilityTag(symbol: string): string {
+  const market = MARKETS.find((entry) => entry.symbol === symbol);
+  if (!market) return symbol;
+  return market.oneSecond ? `V${market.number}·1s` : `V${market.number}`;
+}
+
 interface MarketSelectProps {
   value: string;
   onChange: (symbol: string) => void;

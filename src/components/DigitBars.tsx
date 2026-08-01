@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { DIGITS } from "../lib/analysis/digits";
 import type { DigitStats } from "../lib/analysis/digits";
-import { readMarketPulse } from "../lib/analysis/marketPulse";
+import {
+  readMarketPulse,
+  type PulseRequirements,
+} from "../lib/analysis/marketPulse";
 import type { MarketSignal } from "../lib/analysis/signal";
 
 type Tone = "high" | "second" | "low" | "neutral";
@@ -14,6 +17,8 @@ interface DigitBarsProps {
   latestDigit?: number | null;
   /** Live analyzer signal — sharpens the market mood readout. */
   signal?: MarketSignal | null;
+  /** Bot gate floors shown as “Good needs …”. */
+  requirements?: PulseRequirements;
 }
 
 function toneByRank(counts: number[], sampleSize: number): Tone[] {
@@ -45,13 +50,17 @@ export function DigitBars({
   onSelectDigit,
   latestDigit = null,
   signal = null,
+  requirements,
 }: DigitBarsProps) {
   const { counts, percentages, sampleSize, gaps, hottest, coldest } = stats;
   const tones = toneByRank(counts, sampleSize);
   const maxPct = Math.max(...percentages, 10);
   const [pulseDigit, setPulseDigit] = useState<number | null>(null);
   const [hoverDigit, setHoverDigit] = useState<number | null>(null);
-  const pulse = useMemo(() => readMarketPulse(stats, signal), [stats, signal]);
+  const pulse = useMemo(
+    () => readMarketPulse(stats, signal, requirements),
+    [stats, signal, requirements],
+  );
 
   useEffect(() => {
     if (latestDigit === null || latestDigit === undefined) return;
@@ -156,7 +165,10 @@ export function DigitBars({
         })}
       </div>
 
-      <div className={`digit-map__pulse digit-map__pulse--${pulse.mood}`} title={pulse.detail}>
+      <div
+        className={`digit-map__pulse digit-map__pulse--${pulse.mood}`}
+        title={`${pulse.detail} · ${pulse.need}`}
+      >
         <div className="digit-map__pulse-main">
           <span className="digit-map__pulse-dot" aria-hidden="true" />
           <strong>{pulse.label}</strong>
@@ -166,6 +178,7 @@ export function DigitBars({
           <span className="is-high">Hot</span>
           <span className="is-low">Cold</span>
           <span>Fair 10%</span>
+          <span className="digit-map__legend-need">{pulse.need}</span>
           {latestDigit !== null && latestDigit !== undefined ? (
             <span className="digit-map__legend-live">Live · {latestDigit}</span>
           ) : null}
