@@ -1,23 +1,34 @@
+import { memo } from "react";
+import type { Tick } from "../lib/deriv/types";
+
 interface DigitStripProps {
-  digits: number[];
+  /** Prefer ticks (stable epoch keys). Falls back to digits-only. */
+  ticks?: Tick[];
+  digits?: number[];
   count?: number;
 }
 
-export function DigitStrip({ digits, count = 40 }: DigitStripProps) {
-  const recent = digits.slice(-count);
+function DigitStripInner({ ticks, digits, count = 40 }: DigitStripProps) {
+  const recentTicks = ticks?.slice(-count) ?? null;
+  const recentDigits =
+    recentTicks?.map((tick) => tick.digit) ?? digits?.slice(-count) ?? [];
 
   return (
-    <section className="ticker" aria-label={`Last ${count} digits, newest on the right`}>
+    <section
+      className="ticker"
+      aria-label={`Last ${count} digits, newest on the right`}
+    >
       <div className="ticker__label">Stream</div>
       <div className="ticker__track">
-        {recent.length === 0 ? (
+        {recentDigits.length === 0 ? (
           <span className="empty">Waiting for ticks…</span>
         ) : (
-          recent.map((digit, index) => {
-            const isLatest = index === recent.length - 1;
+          recentDigits.map((digit, index) => {
+            const isLatest = index === recentDigits.length - 1;
+            const epoch = recentTicks?.[index]?.epoch;
             return (
               <span
-                key={`${index}-${digit}-${isLatest ? "live" : "past"}`}
+                key={epoch ?? `d-${index}-${digit}`}
                 className={`ticker__chip ${isLatest ? "is-live" : ""} ${
                   digit % 2 === 0 ? "is-even" : "is-odd"
                 }`}
@@ -31,3 +42,5 @@ export function DigitStrip({ digits, count = 40 }: DigitStripProps) {
     </section>
   );
 }
+
+export const DigitStrip = memo(DigitStripInner);

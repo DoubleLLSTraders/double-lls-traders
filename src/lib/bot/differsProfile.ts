@@ -1,4 +1,5 @@
 import { isAnalyzerGood } from "../analysis/analyzerGate";
+import { resolveAnalyzerPace } from "../analysis/analyzerPace";
 import type { MarketSignal } from "../analysis/signal";
 import type { BotSettings } from "./types";
 
@@ -11,12 +12,11 @@ export interface DiffersFastRiskCaps {
 }
 
 /**
- * Differs desk profile (v22) — cool hostile tape; pause after loss.
+ * Differs desk profile (v23) — Steady or Safer+fast analyzer pace.
  *
- * Fast/flipping markets show Cooling. After a loss: 50s cool + hop, then
- * hunt again. Two losses in a row stop the run.
+ * Default stays Steady (current timings). Safer+fast shortens waits only.
  */
-export const DIFFERS_FAST_PROFILE_VERSION = 22;
+export const DIFFERS_FAST_PROFILE_VERSION = 23;
 
 /** Gate/timing only — stake and money limits stay on the Bot form. */
 export const DIFFERS_FAST_GATES = {
@@ -39,6 +39,8 @@ export const DIFFERS_FAST_GATES = {
   /** After any settle, wait for the tape to cool before the next entry. */
   cooldownTicks: 25,
   parallelExecution: true,
+  /** Default = current desk timings. User may switch to safer-fast. */
+  analyzerPace: "steady",
 } satisfies Partial<BotSettings>;
 
 export const LIVE_DIFFERS_QUALITY_GATES = {
@@ -74,7 +76,7 @@ export const DIFFERS_FAST_MODE = {
 export const DIFFERS_FAST_TAKE_PROFIT = 0.2;
 /** Stop the run after this many losses in a row (1st loss cools; 2nd stops). */
 export const DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES = 2;
-export const DIFFERS_FAST_SYMBOL = "R_75";
+export const DIFFERS_FAST_SYMBOL = "1HZ75V";
 
 export function createDiffersFastBotSettings(risk: DiffersFastRiskCaps): BotSettings {
   const stake = Math.max(0.35, Math.min(1.75, risk.maxStake));
@@ -101,10 +103,16 @@ export function createDiffersFastBotSettings(risk: DiffersFastRiskCaps): BotSett
 }
 
 export function applyDiffersFastProfile(current: BotSettings): BotSettings {
+  // Leaving Matches firm → Differs Steady (do not keep matches-firm pace).
+  const paceId =
+    current.analyzerPace === "safer-fast" ? "safer-fast" : "steady";
+  const pace = resolveAnalyzerPace(paceId);
   return {
     ...current,
     ...DIFFERS_FAST_MODE,
     ...DIFFERS_FAST_GATES,
+    analyzerPace: paceId,
+    cooldownTicks: pace.cooldownTicks,
     maxConsecutiveLosses: DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES,
     // Keep the Bot form's Number of runs / money limits — do not reset to 1.
     maxRuns: Math.max(1, current.maxRuns || 1),
@@ -116,12 +124,13 @@ export function applyDiffersFastProfile(current: BotSettings): BotSettings {
 }
 
 export function isDiffersFastProfile(settings: BotSettings): boolean {
+  const pace = resolveAnalyzerPace(settings.analyzerPace);
   return (
     settings.side === "DIGITDIFF" &&
     settings.autoSide === false &&
     settings.autoFollow === true &&
     settings.martingale === false &&
-    settings.cooldownTicks === DIFFERS_FAST_GATES.cooldownTicks &&
+    settings.cooldownTicks === pace.cooldownTicks &&
     settings.minColdGap === DIFFERS_FAST_GATES.minColdGap &&
     settings.requireTiming === true &&
     settings.maxConsecutiveLosses === DIFFERS_FAST_MAX_CONSECUTIVE_LOSSES

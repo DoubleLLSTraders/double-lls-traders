@@ -132,7 +132,14 @@ export async function downloadTradesPdf(
   // Running totals (newest first, same as UI)
   let running = summary.pnl;
   const body = trades.map((trade) => {
-    const side = trade.side === "DIGITMATCH" ? "Matches" : "Differs";
+    const side =
+      trade.side === "DIGITMATCH"
+        ? "Matches"
+        : trade.side === "DIGITOVER"
+          ? "Over"
+          : trade.side === "DIGITUNDER"
+            ? "Under"
+            : "Differs";
     const entryBits = [
       `${side} ${trade.digit}`,
       trade.entryGap !== null && trade.entryGap !== undefined
@@ -145,7 +152,7 @@ export async function downloadTradesPdf(
       trade.entrySpot !== undefined
         ? `spot ${trade.entrySpot.toFixed(2)}`
         : null,
-      trade.mode === "paper" ? "paper" : null,
+      trade.mode === "paper" ? "demo" : "live",
     ].filter(Boolean);
     const row = [
       clock(trade.at),

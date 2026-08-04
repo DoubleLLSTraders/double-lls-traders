@@ -1,4 +1,5 @@
 import type { DigitStats } from "./digits";
+import { isOverUnderSide, sideLabel } from "./contractSide";
 import {
   DIFF_BARRIER_BREAK_EVEN_PCT,
   MATCH_BREAK_EVEN_PCT,
@@ -6,8 +7,10 @@ import {
 } from "./signal";
 import type { GateResult } from "../bot/gates";
 import {
+  breakEvenDigitPercent,
   DIFF_PAYOUT_MULTIPLIER,
   MATCH_PAYOUT_MULTIPLIER,
+  payoutMultiplier,
 } from "../bot/performance";
 
 export interface AiBrief {
@@ -26,14 +29,28 @@ export function buildAiBrief(input: {
 }): AiBrief {
   const { signal, stats, gate, botDigit, minEdgePercent } = input;
   const matches = signal.side === "DIGITMATCH";
-  const payout = matches ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER;
-  const breakEven = matches ? MATCH_BREAK_EVEN_PCT : (1 / DIFF_PAYOUT_MULTIPLIER) * 100;
+  const ou = isOverUnderSide(signal.side);
+  const payout = ou
+    ? payoutMultiplier(signal.side, undefined, signal.digit)
+    : matches
+      ? MATCH_PAYOUT_MULTIPLIER
+      : DIFF_PAYOUT_MULTIPLIER;
+  const breakEven = ou
+    ? breakEvenDigitPercent(signal.side, undefined, signal.digit)
+    : matches
+      ? MATCH_BREAK_EVEN_PCT
+      : (1 / DIFF_PAYOUT_MULTIPLIER) * 100;
   const digitPct = signal.digitPercent;
   const gap = signal.watching.signalGap;
 
   const bullets: string[] = [];
 
-  if (matches) {
+  if (ou) {
+    const need = breakEven + minEdgePercent;
+    bullets.push(
+      `${sideLabel(signal.side)} stack: barrier ${signal.digit} win-rate vs payout BE (≥ ${need.toFixed(1)}%) + recent winning hit + clear edge vs rival barriers. ×${payout.toFixed(2)}.`,
+    );
+  } else if (matches) {
     const need = MATCH_BREAK_EVEN_PCT + minEdgePercent;
     bullets.push(
       `Matches stack: stable hot digit + Wilson EV (≥ ${need.toFixed(1)}% point + bound) + multi-window EV + recent print + χ² lead.`,
@@ -46,7 +63,7 @@ export function buildAiBrief(input: {
   }
 
   bullets.push(
-    `Digit ${signal.digit}: ${digitPct.toFixed(1)}% · ${signal.watching.separation} · ${signal.watching.wilsonBound} · gap ${gap ?? "—"}.`,
+    `${ou ? "Barrier" : "Digit"} ${signal.digit}: ${digitPct.toFixed(1)}% · ${signal.watching.separation} · ${signal.watching.wilsonBound} · gap ${gap ?? "—"}.`,
   );
   bullets.push(
     `Confirms · EV ${signal.evOk ? "ok" : "no"} · windows ${signal.windowsAgree ? "agree" : "split"} · multi-EV ${signal.windowsEvOk ? "ok" : "no"} · timing ${signal.timingOk ? "ok" : "no"} · structure ${signal.structureOk ? "ok" : "no"}.`,
@@ -59,13 +76,15 @@ export function buildAiBrief(input: {
     }.`,
   );
   bullets.push(
-    `Bot digit ${botDigit} ${botDigit === signal.digit ? "matches signal" : `manual vs signal ${signal.digit}`}.`,
+    `Bot ${ou ? "barrier" : "digit"} ${botDigit} ${botDigit === signal.digit ? "matches signal" : `manual vs signal ${signal.digit}`}.`,
   );
 
   return {
-    headline: matches
-      ? "Matches · Wilson-cleared hot persistence"
-      : "Differs · Wilson-cleared cold barrier",
+    headline: ou
+      ? `${sideLabel(signal.side)} · barrier edge vs payout`
+      : matches
+        ? "Matches · Wilson-cleared hot persistence"
+        : "Differs · Wilson-cleared cold barrier",
     bullets,
     caution:
       "Cleaner filters cut noise and correlated spam. They do not create edge on near-fair digits — journal expectancy is the scoreboard.",

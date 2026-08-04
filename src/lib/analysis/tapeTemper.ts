@@ -19,7 +19,7 @@ export interface TapeTemper {
 const FLIP_WINDOW_MS = 20_000;
 /** This many cold flips in the window ⇒ tape is chaotic. */
 const HOSTILE_FLIPS = 3;
-/** Cold must hold #1 this long before we trust a lock. */
+/** Cold must hold #1 this long before we trust a lock (Steady default). */
 export const COLD_SETTLE_MS = 4_000;
 /** Gap shrinks this many times while “building” ⇒ unstable. */
 const HOSTILE_GAP_DROPS = 3;
@@ -78,11 +78,13 @@ export function readTapeTemper(
   temper: TapeTemper,
   signal: MarketSignal,
   nowMs: number = Date.now(),
+  coldSettleMs: number = COLD_SETTLE_MS,
 ): TemperVerdict {
   if (signal.side !== "DIGITDIFF") return { ok: true };
 
   const gap = signal.watching.signalGap ?? 0;
   const coldAge = nowMs - temper.coldSinceMs;
+  const settleMs = Math.max(500, coldSettleMs);
 
   // Barrier just printed — tape is hot.
   if (signal.watching.lastDigit === signal.digit) {
@@ -112,11 +114,11 @@ export function readTapeTemper(
   }
 
   // New #1 cold — give it time before any lock.
-  if (temper.coldDigit === signal.digit && coldAge < COLD_SETTLE_MS && gap >= 3) {
+  if (temper.coldDigit === signal.digit && coldAge < settleMs && gap >= 3) {
     return {
       ok: false,
       label: "Cooling",
-      reason: `Cooling · cold ${signal.digit} settling ${Math.round(coldAge / 100) / 10}s/${COLD_SETTLE_MS / 1000}s`,
+      reason: `Cooling · cold ${signal.digit} settling ${Math.round(coldAge / 100) / 10}s/${settleMs / 1000}s`,
     };
   }
 

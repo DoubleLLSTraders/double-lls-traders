@@ -1,8 +1,16 @@
+import type { AnalyzerPaceId } from "../analysis/analyzerPace";
 import type { ContractSide } from "../analysis/signal";
 
 export interface BotSettings {
   side: ContractSide;
   prediction: number;
+  /**
+   * Analyzer speed profile.
+   * steady / safer-fast = Differs prove times.
+   * matches-firm = Matches long prove (~2–3 min).
+   * overunder-firm = Over/Under barrier prove.
+   */
+  analyzerPace: AnalyzerPaceId;
   stake: number;
   contracts: number;
   duration: number;
@@ -85,6 +93,17 @@ export interface BotSettings {
   stopLoss: number;
   /** Stop after this many settled baskets. 0 = unlimited. */
   maxRuns: number;
+  /**
+   * When true, stake / balance sync does not overwrite maxRuns
+   * (bulk multi-hour sessions).
+   */
+  maxRunsManual?: boolean;
+  /**
+   * Timed Start length in hours (1 / 4 / 8). 0 = off (Quick / TP-linked).
+   * Bot keeps staking the form stake until this wall-clock window ends
+   * (or stop loss / manual Stop). Take profit is off while this is set.
+   */
+  sessionHours?: number;
   running: boolean;
 }
 
@@ -144,6 +163,8 @@ export interface BotSession {
     entryEpoch: number;
     settleAfter: number;
     mode: "paper" | "live";
+    /** Epoch when the buy was sent (same as entryEpoch for same-tick buy). */
+    orderEpoch?: number;
     contractId?: number;
     /** Every filled leg, so live settlement can read the real outcome. */
     contractIds?: number[];

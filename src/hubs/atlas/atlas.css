@@ -1,0 +1,1538 @@
+.atlas-app {
+  --atlas-bg: #06090e;
+  --atlas-panel: #0c1219;
+  --atlas-inset: #070b10;
+  --atlas-strip: #0a1017;
+  --atlas-side: #090e14;
+  --atlas-chart: #0a0e14;
+  --atlas-line: #1a2433;
+  --atlas-muted: #8494a8;
+  --atlas-text: #e8eef6;
+  --atlas-accent: #3dffa8;
+  --atlas-danger: #ff6b84;
+  --atlas-warn: #f0c45a;
+  --atlas-info: #5ad0ff;
+  --atlas-progress: #121a24;
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 420px at 8% -8%, rgba(61, 255, 168, 0.06), transparent 60%),
+    radial-gradient(700px 380px at 92% 0%, rgba(70, 130, 255, 0.05), transparent 55%),
+    var(--atlas-bg);
+  color: var(--atlas-text);
+  font-family: "Segoe UI", "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.atlas-app[data-theme="light"] {
+  --atlas-bg: #eef2f7;
+  --atlas-panel: #ffffff;
+  --atlas-inset: #f4f7fb;
+  --atlas-strip: #e8eef5;
+  --atlas-side: #f7f9fc;
+  --atlas-chart: #ffffff;
+  --atlas-line: #cfd8e3;
+  --atlas-muted: #5a6a7c;
+  --atlas-text: #14202b;
+  --atlas-accent: #0b8f63;
+  --atlas-danger: #c93b52;
+  --atlas-warn: #a67910;
+  --atlas-info: #1a7aab;
+  --atlas-progress: #d9e2ec;
+  background:
+    linear-gradient(180deg, #f7f9fc 0%, #eef2f7 40%, #e8edf4 100%);
+  color: var(--atlas-text);
+}
+
+.atlas-topbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(0, 2.2fr) auto;
+  align-items: center;
+  gap: 1rem 1.25rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: 1px solid var(--atlas-line);
+  background: color-mix(in srgb, var(--atlas-bg) 92%, transparent);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+.atlas-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.atlas-brand__logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.atlas-brand__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.atlas-brand__title strong {
+  font-size: 1.05rem;
+  letter-spacing: 0.03em;
+  font-weight: 650;
+}
+
+.atlas-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--atlas-line);
+  color: var(--atlas-muted);
+}
+
+.atlas-pill--live {
+  border-color: rgba(61, 255, 168, 0.35);
+  color: var(--atlas-accent);
+  background: rgba(61, 255, 168, 0.08);
+}
+
+.atlas-pill--demo {
+  background: color-mix(in srgb, var(--atlas-info) 14%, transparent);
+  border-color: color-mix(in srgb, var(--atlas-info) 40%, var(--atlas-line));
+  color: var(--atlas-info);
+}
+
+.atlas-metric--demo strong {
+  color: var(--atlas-info);
+  font-size: 1.05rem;
+}
+
+.atlas-settle-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65rem 1.1rem;
+  margin: 0 1.25rem 0.85rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.atlas-settle-banner.is-win {
+  background: color-mix(in srgb, var(--atlas-accent) 12%, var(--atlas-panel));
+  border-color: color-mix(in srgb, var(--atlas-accent) 40%, var(--atlas-line));
+  color: var(--atlas-text);
+}
+
+.atlas-settle-banner.is-loss {
+  background: color-mix(in srgb, var(--atlas-danger) 12%, var(--atlas-panel));
+  border-color: color-mix(in srgb, var(--atlas-danger) 40%, var(--atlas-line));
+  color: var(--atlas-text);
+}
+
+.atlas-settle-banner strong {
+  font-size: 0.95rem;
+}
+
+.atlas-settle-banner span {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: inherit;
+}
+
+.atlas-settle-banner.is-win span {
+  color: var(--atlas-accent);
+}
+
+.atlas-settle-banner.is-loss span {
+  color: var(--atlas-danger);
+}
+
+.atlas-settle-banner em {
+  font-style: normal;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.atlas-demo-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.atlas-demo-stats div {
+  background: var(--atlas-inset);
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+}
+
+.atlas-demo-stats span {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.15rem;
+}
+
+.atlas-demo-stats strong {
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-demo-stats strong.is-up {
+  color: var(--atlas-accent);
+}
+
+.atlas-demo-stats strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-pill--live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--atlas-accent);
+  box-shadow: 0 0 8px var(--atlas-accent);
+}
+
+.atlas-pill--off {
+  border-color: rgba(255, 107, 132, 0.35);
+  color: var(--atlas-danger);
+}
+
+.atlas-scan-board {
+  margin-top: 0.75rem;
+  border: 1px solid var(--atlas-line);
+  border-radius: 10px;
+  background: var(--atlas-inset);
+  overflow: hidden;
+}
+
+.atlas-scan-board__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-bottom: 1px solid var(--atlas-line);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+}
+
+.atlas-scan-board ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.atlas-scan-board li button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1.6rem 1fr auto auto;
+  gap: 0.45rem;
+  align-items: center;
+  text-align: left;
+  padding: 0.4rem 0.65rem;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--atlas-line) 70%, transparent);
+  background: transparent;
+  color: var(--atlas-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.atlas-scan-board li.is-active button {
+  background: color-mix(in srgb, var(--atlas-accent) 10%, transparent);
+}
+
+.atlas-scan-board li button:hover {
+  background: color-mix(in srgb, var(--atlas-text) 6%, transparent);
+}
+
+.atlas-scan-board em {
+  font-style: normal;
+  color: var(--atlas-muted);
+  font-size: 0.72rem;
+}
+
+.atlas-scan-board strong {
+  font-size: 0.78rem;
+}
+
+.atlas-scan-board span {
+  font-size: 0.68rem;
+  color: var(--atlas-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-scan-bias.is-buy {
+  color: var(--atlas-accent);
+  font-weight: 700;
+}
+
+.atlas-scan-bias.is-sell {
+  color: var(--atlas-danger);
+  font-weight: 700;
+}
+
+.atlas-scan-bias.is-neutral {
+  color: var(--atlas-muted);
+}
+
+.atlas-wait-timer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.atlas-wait-timer div {
+  background: var(--atlas-inset);
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+}
+
+.atlas-wait-timer span {
+  display: block;
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.15rem;
+}
+
+.atlas-wait-timer strong {
+  display: block;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--atlas-warn);
+}
+
+@media (max-width: 980px) {
+  .atlas-wait-timer {
+    grid-template-columns: 1fr;
+  }
+}
+
+.atlas-brand__sub {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  color: var(--atlas-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atlas-metrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.atlas-metric {
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--atlas-panel) 88%, transparent);
+}
+
+.atlas-metric span {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.12rem;
+}
+
+.atlas-metric strong {
+  display: block;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--atlas-text);
+}
+
+.atlas-metric strong.is-up {
+  color: var(--atlas-accent);
+}
+.atlas-metric strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-topbar__actions {
+  display: flex;
+  gap: 0.45rem;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.atlas-nav-btn {
+  appearance: none;
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-panel);
+  color: var(--atlas-text);
+  border-radius: 8px;
+  padding: 0.5rem 0.85rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+  position: relative;
+  z-index: 2;
+}
+
+.atlas-nav-btn:hover {
+  border-color: color-mix(in srgb, var(--atlas-accent) 45%, var(--atlas-line));
+  color: var(--atlas-accent);
+}
+
+.atlas-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  padding: 0.65rem 1.5rem;
+  border-bottom: 1px solid var(--atlas-line);
+  background: var(--atlas-strip);
+  font-size: 0.8rem;
+  color: var(--atlas-muted);
+}
+
+.atlas-strip__quote {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: var(--atlas-text);
+}
+
+.atlas-strip__quote strong.is-up {
+  color: var(--atlas-accent);
+}
+.atlas-strip__quote strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-strip__dot {
+  opacity: 0.45;
+}
+
+.atlas-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 0;
+  min-height: calc(100vh - 132px);
+}
+
+.atlas-side {
+  padding: 1.25rem 1.1rem;
+  border-right: 1px solid var(--atlas-line);
+  background: var(--atlas-side);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.atlas-side__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.atlas-side__label {
+  margin: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+}
+
+.atlas-main {
+  padding: 1.15rem 1.35rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+  min-width: 0;
+}
+
+.atlas-command {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 1fr);
+  gap: 1rem;
+  padding: 1rem 1.1rem;
+  background: var(--atlas-panel);
+  border: 1px solid var(--atlas-line);
+  border-radius: 12px;
+}
+
+.atlas-command__label {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.55rem;
+  font-weight: 600;
+}
+
+.atlas-command__meters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin: 0.55rem 0 0.7rem;
+  font-size: 0.82rem;
+  color: var(--atlas-muted);
+}
+
+.atlas-command__meters em {
+  font-style: normal;
+  color: var(--atlas-text);
+  margin-left: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-command__explain {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--atlas-text);
+  opacity: 0.9;
+}
+
+.atlas-command__bot {
+  border-left: 1px solid var(--atlas-line);
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.atlas-bot-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.atlas-bot-form__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.45rem;
+}
+
+.atlas-bot-form .atlas-field {
+  margin: 0;
+}
+
+.atlas-bot-form .atlas-field--wide {
+  flex: 1 1 100%;
+}
+
+.atlas-bot-mode-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--atlas-muted);
+}
+
+.atlas-bot-form .atlas-field input,
+.atlas-bot-form .atlas-field select {
+  width: 100%;
+}
+
+.atlas-bot-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+  padding: 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-inset);
+}
+
+.atlas-bot-preview span {
+  display: block;
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+}
+
+.atlas-bot-preview strong {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-bot-form__actions {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.atlas-bot-form__actions .atlas-start {
+  margin: 0;
+  padding: 0.7rem 0.75rem;
+  font-size: 0.92rem;
+}
+
+.atlas-bot-form__actions .atlas-settle {
+  margin: 0;
+  width: 100%;
+  justify-content: center;
+}
+
+.atlas-bot-form__actions .atlas-settle:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.atlas-start {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.atlas-start.is-start {
+  background: var(--atlas-accent);
+  color: #04150f;
+}
+
+.atlas-start.is-stop {
+  background: var(--atlas-danger);
+  color: #fff5f6;
+}
+
+.atlas-start:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.atlas-command__note {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: var(--atlas-muted);
+  line-height: 1.4;
+}
+
+.atlas-command__note.is-live {
+  color: var(--atlas-accent);
+}
+
+@media (max-width: 980px) {
+  .atlas-command {
+    grid-template-columns: 1fr;
+  }
+  .atlas-command__bot {
+    border-left: 0;
+    border-top: 1px solid var(--atlas-line);
+    padding-left: 0;
+    padding-top: 0.85rem;
+  }
+}
+
+.atlas-panel h3 {
+  margin: 0 0 0.9rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  font-weight: 600;
+}
+
+.atlas-panel--status {
+  border-color: rgba(61, 255, 168, 0.22);
+}
+
+.atlas-session {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.atlas-session__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.55rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-inset);
+}
+
+.atlas-session__status strong {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.atlas-session__status span {
+  font-size: 0.82rem;
+  color: var(--atlas-muted);
+}
+
+.atlas-session__status.is-trade {
+  border-color: rgba(61, 255, 168, 0.4);
+}
+.atlas-session__status.is-trade strong {
+  color: var(--atlas-accent);
+}
+
+.atlas-session__status.is-wait strong {
+  color: #f0c45a;
+}
+
+.atlas-session__status.is-stop strong {
+  color: var(--atlas-muted);
+}
+
+.atlas-status-kpis--money {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.atlas-status-kpis--money strong.is-up {
+  color: var(--atlas-accent);
+}
+
+.atlas-status-kpis--money strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-session__hint {
+  margin: 0;
+}
+
+.atlas-open-pl {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(61, 255, 168, 0.06);
+  border: 1px solid rgba(61, 255, 168, 0.2);
+}
+
+.atlas-open-pl span {
+  font-size: 0.75rem;
+  color: var(--atlas-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.atlas-open-pl strong {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-open-pl strong.is-up {
+  color: var(--atlas-accent);
+}
+
+.atlas-open-pl strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-open-pl em {
+  font-style: normal;
+  color: var(--atlas-muted);
+  font-size: 0.85rem;
+}
+
+.atlas-open-coach {
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-inset);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--atlas-text);
+}
+
+.atlas-open-coach.is-sell {
+  border-color: color-mix(in srgb, var(--atlas-danger) 35%, var(--atlas-line));
+}
+
+.atlas-open-coach.is-buy {
+  border-color: color-mix(in srgb, var(--atlas-accent) 35%, var(--atlas-line));
+}
+
+.atlas-open-coach strong {
+  margin-right: 0.25rem;
+}
+
+.atlas-open-coach.is-sell strong {
+  color: var(--atlas-danger);
+}
+
+.atlas-open-coach.is-buy strong {
+  color: var(--atlas-accent);
+}
+
+.atlas-open-coach em {
+  font-style: normal;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.atlas-settle-help {
+  margin: 0.35rem 0 0.65rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 980px) {
+  .atlas-status-kpis--money {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.atlas-status-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.atlas-status-kpis div {
+  background: var(--atlas-inset);
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+}
+
+.atlas-status-kpis span {
+  display: block;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.2rem;
+}
+
+.atlas-status-kpis strong {
+  display: block;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-status-kpis em {
+  display: block;
+  margin-top: 0.2rem;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--atlas-muted);
+}
+
+.atlas-open-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.atlas-open-card {
+  background: var(--atlas-inset);
+  border: 1px solid var(--atlas-line);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+
+.atlas-open-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.atlas-open-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.atlas-open-grid span {
+  display: block;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.15rem;
+}
+
+.atlas-open-grid strong {
+  display: block;
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-open-grid strong.is-up {
+  color: var(--atlas-accent);
+}
+.atlas-open-grid strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-progress {
+  margin-top: 0.85rem;
+}
+
+.atlas-progress__label {
+  font-size: 0.75rem;
+  color: var(--atlas-muted);
+  margin-bottom: 0.35rem;
+}
+
+.atlas-progress__bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--atlas-progress);
+  overflow: hidden;
+}
+
+.atlas-progress__bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3dffa8, #5ad0ff);
+  border-radius: 999px;
+}
+
+@media (max-width: 980px) {
+  .atlas-status-kpis,
+  .atlas-open-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.atlas-panel--chart {
+  height: min(74vh, 760px);
+  min-height: 520px;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid #1c2634;
+  background: var(--atlas-chart);
+}
+
+.atlas-chart-head {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.9rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+
+.atlas-chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+}
+
+.atlas-chart-coach {
+  position: absolute;
+  left: 0.85rem;
+  top: 0.75rem;
+  z-index: 4;
+  max-width: min(340px, 70%);
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--atlas-line);
+  background: color-mix(in srgb, var(--atlas-panel) 88%, transparent);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.atlas-chart-coach strong {
+  display: block;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
+
+.atlas-chart-coach span {
+  font-size: 0.78rem;
+  color: var(--atlas-text);
+  line-height: 1.3;
+}
+
+.atlas-chart-coach em {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.atlas-chart-coach.is-sell strong {
+  color: var(--atlas-danger);
+}
+
+.atlas-chart-coach.is-buy strong {
+  color: var(--atlas-accent);
+}
+
+.atlas-chart-result {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 0.35rem;
+  pointer-events: none;
+  animation: atlas-result-pop 3.4s ease-out both;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.atlas-chart-result strong {
+  font-size: clamp(64px, 12vw, 120px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 0.95;
+  text-shadow: 0 8px 40px rgba(0, 0, 0, 0.55);
+}
+
+.atlas-chart-result em {
+  font-style: normal;
+  font-size: clamp(28px, 5vw, 42px);
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 6px 28px rgba(0, 0, 0, 0.5);
+}
+
+.atlas-chart-result--win {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--atlas-accent) 28%, transparent) 0%,
+    transparent 62%
+  );
+}
+
+.atlas-chart-result--win strong,
+.atlas-chart-result--win em {
+  color: var(--atlas-accent);
+}
+
+.atlas-chart-result--loss {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--atlas-danger) 26%, transparent) 0%,
+    transparent 62%
+  );
+}
+
+.atlas-chart-result--loss strong,
+.atlas-chart-result--loss em {
+  color: var(--atlas-danger);
+}
+
+.atlas-chart-result--flat {
+  background: radial-gradient(
+    circle at 50% 45%,
+    color-mix(in srgb, var(--atlas-warn) 22%, transparent) 0%,
+    transparent 62%
+  );
+}
+
+.atlas-chart-result--flat strong,
+.atlas-chart-result--flat em {
+  color: var(--atlas-warn);
+}
+
+@keyframes atlas-result-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  12% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  22% {
+    transform: scale(1);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.04) translateY(-12px);
+  }
+}
+
+/* legacy bank card removed — wins float like digits hub */
+
+.atlas-chart-legend {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.9rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.65rem;
+  pointer-events: none;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.atlas-chart-legend .is-ema20 {
+  color: #5ad0ff;
+}
+
+.atlas-chart-legend .is-ema50 {
+  color: #f0c45a;
+}
+
+.atlas-chart-legend .is-vol {
+  color: #7d8b9c;
+}
+
+.atlas-chart {
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+}
+
+.atlas-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.15rem;
+}
+
+.atlas-grid--desk {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.atlas-command__bias-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+}
+
+.atlas-factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.55rem 0 0.7rem;
+}
+
+.atlas-factor {
+  font-size: 0.7rem;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--atlas-line);
+  color: var(--atlas-muted);
+}
+
+.atlas-factor.is-buy {
+  border-color: rgba(61, 255, 168, 0.35);
+  color: var(--atlas-accent);
+  background: rgba(61, 255, 168, 0.06);
+}
+
+.atlas-factor.is-sell {
+  border-color: rgba(255, 107, 132, 0.35);
+  color: var(--atlas-danger);
+  background: rgba(255, 107, 132, 0.06);
+}
+
+.atlas-ind strong.is-up {
+  color: var(--atlas-accent);
+}
+.atlas-ind strong.is-down {
+  color: var(--atlas-danger);
+}
+
+.atlas-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  color: var(--atlas-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.atlas-field select,
+.atlas-field input {
+  background: var(--atlas-inset);
+  border: 1px solid #243246;
+  color: var(--atlas-text);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.88rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.atlas-field select:focus,
+.atlas-field input:focus {
+  outline: 1px solid rgba(61, 255, 168, 0.35);
+  border-color: rgba(61, 255, 168, 0.35);
+}
+
+.atlas-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  margin-bottom: 0.55rem;
+  color: var(--atlas-text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.atlas-bias {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.85rem;
+  font-size: 0.85rem;
+}
+
+.atlas-bias.is-buy {
+  background: rgba(61, 255, 168, 0.14);
+  color: var(--atlas-accent);
+}
+.atlas-bias.is-sell {
+  background: rgba(255, 107, 132, 0.14);
+  color: var(--atlas-danger);
+}
+.atlas-bias.is-neutral {
+  background: color-mix(in srgb, var(--atlas-muted) 16%, transparent);
+  color: var(--atlas-muted);
+}
+
+.atlas-meters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin-bottom: 0.9rem;
+}
+
+.atlas-meters div {
+  background: var(--atlas-inset);
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  padding: 0.55rem 0.6rem;
+}
+
+.atlas-meters span {
+  display: block;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--atlas-muted);
+  margin-bottom: 0.15rem;
+}
+
+.atlas-meters strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-explain {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--atlas-text);
+  opacity: 0.88;
+  margin: 0;
+}
+
+.atlas-ind {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem 1rem;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-ind li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(26, 36, 51, 0.8);
+}
+
+.atlas-ind span {
+  color: var(--atlas-muted);
+}
+
+.atlas-muted {
+  color: var(--atlas-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.atlas-ok {
+  color: var(--atlas-accent);
+  font-size: 0.84rem;
+  margin: 0.65rem 0 0;
+}
+.atlas-bad {
+  color: var(--atlas-danger);
+  font-size: 0.84rem;
+  margin: 0.65rem 0 0;
+}
+
+.atlas-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 360px;
+  color: var(--atlas-muted);
+  padding: 1.5rem;
+  text-align: center;
+}
+.atlas-empty--err {
+  color: var(--atlas-danger);
+}
+
+.atlas-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.atlas-table th,
+.atlas-table td {
+  text-align: left;
+  padding: 0.55rem 0.4rem;
+  border-bottom: 1px solid var(--atlas-line);
+  vertical-align: middle;
+}
+
+.atlas-table th {
+  color: var(--atlas-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.atlas-table td.is-up {
+  color: var(--atlas-accent);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-table td.is-down {
+  color: var(--atlas-danger);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-panel .btn {
+  margin-top: 0.75rem;
+  margin-right: 0.45rem;
+}
+
+.atlas-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+
+.atlas-actions-row--settle {
+  margin-top: 0.85rem;
+  gap: 0.55rem;
+}
+
+.atlas-settle {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.55rem 1rem;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.atlas-settle--win {
+  background: rgba(61, 255, 168, 0.12);
+  border-color: rgba(61, 255, 168, 0.45);
+  color: #3dffa8;
+}
+
+.atlas-settle--win:hover {
+  background: rgba(61, 255, 168, 0.22);
+}
+
+.atlas-settle--loss {
+  background: rgba(255, 90, 90, 0.1);
+  border-color: rgba(255, 90, 90, 0.4);
+  color: #ff7a7a;
+}
+
+.atlas-settle--loss:hover {
+  background: rgba(255, 90, 90, 0.18);
+}
+
+.atlas-open-plain {
+  margin: 0.75rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--atlas-muted);
+}
+
+.atlas-open-plain strong {
+  color: var(--atlas-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.atlas-open-plain strong.is-up {
+  color: var(--atlas-accent);
+}
+
+.atlas-open-plain strong.is-down {
+  color: var(--atlas-danger);
+}
+
+@media (max-width: 1200px) {
+  .atlas-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  .atlas-topbar {
+    grid-template-columns: 1fr;
+  }
+  .atlas-layout {
+    grid-template-columns: 1fr;
+  }
+  .atlas-grid {
+    grid-template-columns: 1fr;
+  }
+  .atlas-grid--desk {
+    grid-template-columns: 1fr;
+  }
+  .atlas-side {
+    border-right: 0;
+    border-bottom: 1px solid var(--atlas-line);
+  }
+  .atlas-ind {
+    grid-template-columns: 1fr;
+  }
+}
+
+.atlas-app[data-theme="light"] .atlas-side {
+  background: var(--atlas-side);
+  border-color: var(--atlas-line);
+}
+
+.atlas-app[data-theme="light"] .atlas-panel,
+.atlas-app[data-theme="light"] .atlas-command,
+.atlas-app[data-theme="light"] .atlas-metric,
+.atlas-app[data-theme="light"] .atlas-nav-btn {
+  box-shadow: 0 1px 2px rgba(20, 32, 43, 0.04);
+}
+
+.atlas-app[data-theme="light"] .atlas-topbar {
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom-color: var(--atlas-line);
+}
+
+.atlas-app[data-theme="light"] .atlas-strip {
+  background: var(--atlas-strip);
+  color: var(--atlas-muted);
+}
+
+.atlas-app[data-theme="light"] .atlas-panel--chart {
+  background: var(--atlas-chart);
+  border-color: var(--atlas-line);
+}
+
+.atlas-app[data-theme="light"] .atlas-bot-preview,
+.atlas-app[data-theme="light"] .atlas-open-card,
+.atlas-app[data-theme="light"] .atlas-session__status,
+.atlas-app[data-theme="light"] .atlas-status-kpis div,
+.atlas-app[data-theme="light"] .atlas-demo-stats div {
+  background: var(--atlas-inset);
+  border-color: var(--atlas-line);
+}
+
+.atlas-app[data-theme="light"] .atlas-open-pl {
+  background: color-mix(in srgb, var(--atlas-accent) 8%, var(--atlas-panel));
+  border-color: color-mix(in srgb, var(--atlas-accent) 28%, var(--atlas-line));
+}
+
+.atlas-app[data-theme="light"] .atlas-progress__bar {
+  background: var(--atlas-progress);
+}
+
+.atlas-app[data-theme="light"] .atlas-progress__bar i {
+  background: linear-gradient(90deg, #0b8f63, #1a7aab);
+}
+
+.atlas-app[data-theme="light"] .atlas-start.is-start {
+  color: #ffffff;
+}
+
+.atlas-app[data-theme="light"] .atlas-chart-legend .is-ema20 {
+  color: #1a7aab;
+}
+
+.atlas-app[data-theme="light"] .atlas-chart-legend .is-ema50 {
+  color: #a67910;
+}
+
+.atlas-app[data-theme="light"] .atlas-chart-legend .is-vol {
+  color: var(--atlas-muted);
+}
+
+.atlas-app[data-theme="light"] .atlas-settle--win {
+  background: color-mix(in srgb, var(--atlas-accent) 12%, white);
+  border-color: color-mix(in srgb, var(--atlas-accent) 45%, var(--atlas-line));
+  color: var(--atlas-accent);
+}
+
+.atlas-app[data-theme="light"] .atlas-settle--loss {
+  background: color-mix(in srgb, var(--atlas-danger) 10%, white);
+  border-color: color-mix(in srgb, var(--atlas-danger) 40%, var(--atlas-line));
+  color: var(--atlas-danger);
+}

@@ -1,3 +1,5 @@
+import type { ContractSide } from "../analysis/signal";
+
 /**
  * Deriv total payout multiples (stake included), measured from live proposals.
  *
@@ -11,6 +13,37 @@ export const MATCH_PAYOUT_MULTIPLIER = 8.33;
 export const DIFF_PAYOUT_MULTIPLIER = 1.087;
 
 /**
+ * Conservative Over/Under total-payout multiples by barrier (stake included).
+ * Fair odds would be 1/P(win); these sit slightly under fair so paper never
+ * looks better than a typical Deriv quote. Live settles on the buy quote.
+ *
+ * Over barrier b wins when digit > b (P = (9-b)/10).
+ * Under barrier b wins when digit < b (P = b/10).
+ */
+const OVER_PAYOUT_BY_BARRIER: Record<number, number> = {
+  0: 1.09,
+  1: 1.22,
+  2: 1.39,
+  3: 1.61,
+  4: 1.92,
+  5: 2.4,
+  6: 3.15,
+  7: 4.7,
+  8: 8.9,
+};
+const UNDER_PAYOUT_BY_BARRIER: Record<number, number> = {
+  1: 8.9,
+  2: 4.7,
+  3: 3.15,
+  4: 2.4,
+  5: 1.92,
+  6: 1.61,
+  7: 1.39,
+  8: 1.22,
+  9: 1.09,
+};
+
+/**
  * Payouts split into two tiers, measured across every index in check-payout.
  * These three pay about a cent less per unit, which costs ~0.9 percentage
  * points of expected value on Differs for no compensating benefit.
@@ -19,10 +52,23 @@ const LOW_PAYOUT_SYMBOLS = new Set(["R_100", "1HZ10V", "1HZ100V"]);
 const LOW_PAYOUTS = { match: 8.3333, diff: 1.087 };
 const TYPICAL_PAYOUTS = { match: 8.9286, diff: 1.0965 };
 
-export function payoutMultiplier(
-  side: "DIGITMATCH" | "DIGITDIFF",
-  symbol?: string,
+export function overUnderPayoutMultiplier(
+  side: "DIGITOVER" | "DIGITUNDER",
+  barrier: number,
 ): number {
+  const table =
+    side === "DIGITOVER" ? OVER_PAYOUT_BY_BARRIER : UNDER_PAYOUT_BY_BARRIER;
+  return table[barrier] ?? (side === "DIGITOVER" ? 1.92 : 1.92);
+}
+
+export function payoutMultiplier(
+  side: ContractSide,
+  symbol?: string,
+  barrier?: number,
+): number {
+  if (side === "DIGITOVER" || side === "DIGITUNDER") {
+    return overUnderPayoutMultiplier(side, barrier ?? 4);
+  }
   const table = symbol && LOW_PAYOUT_SYMBOLS.has(symbol) ? LOW_PAYOUTS : TYPICAL_PAYOUTS;
   return side === "DIGITMATCH" ? table.match : table.diff;
 }
@@ -77,22 +123,22 @@ export function diffExpectedValue(stake: number, symbol?: string): number {
 }
 
 /**
- * Barrier-digit frequency at which the side breaks even.
- * Matches must clear it from below; Differs must stay under it.
+ * Win-rate % (or barrier frequency for Differs) at which the side breaks even.
+ * Matches / Over / Under must clear it from below; Differs must stay under it.
  */
 export function breakEvenDigitPercent(
-  side: "DIGITMATCH" | "DIGITDIFF",
+  side: ContractSide,
   symbol?: string,
+  barrier?: number,
 ): number {
-  const multiple = payoutMultiplier(side, symbol);
-  return side === "DIGITMATCH" ? 100 / multiple : 100 * (1 - 1 / multiple);
+  const multiple = payoutMultiplier(side, symbol, barrier);
+  if (side === "DIGITDIFF") return 100 * (1 - 1 / multiple);
+  return 100 / multiple;
 }
 
 /** Profit per 1.0 of exposure on a win (payout minus the stake back). */
-export function profitRate(side: "DIGITMATCH" | "DIGITDIFF"): number {
-  return (
-    (side === "DIGITMATCH" ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER) - 1
-  );
+export function profitRate(side: ContractSide, barrier?: number): number {
+  return payoutMultiplier(side, undefined, barrier) - 1;
 }
 
 export interface PerformanceStats {
@@ -155,13 +201,13 @@ export function computePerformance(input: {
 export function settleContractPnl(
   exposure: number,
   won: boolean,
-  side: "DIGITMATCH" | "DIGITDIFF",
+  side: ContractSide,
   actualPayout?: number,
+  barrier?: number,
 ) {
   if (!won) return -exposure;
   if (actualPayout !== undefined && actualPayout > 0) return actualPayout - exposure;
-  const payout =
-    side === "DIGITMATCH" ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER;
+  const payout = payoutMultiplier(side, undefined, barrier);
   return exposure * (payout - 1);
 }
 

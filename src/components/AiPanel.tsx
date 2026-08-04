@@ -466,7 +466,16 @@ function TradeRow({ trade }: { trade: StoredTrade }) {
     <div className="ai-trades__row" role="row">
       <span>{clock(trade.at)}</span>
       <span>
-        {trade.side === "DIGITMATCH" ? "Matches" : "Differs"} {trade.digit}
+        {/* side labels: Matches / Differs / Over / Under */}
+        {`${
+          trade.side === "DIGITMATCH"
+            ? "Matches"
+            : trade.side === "DIGITDIFF"
+              ? "Differs"
+              : trade.side === "DIGITOVER"
+                ? "Over"
+                : "Under"
+        } ${trade.digit}`}
       </span>
       <span>
         {trade.contracts > 1 ? `${trade.contracts}×` : ""}

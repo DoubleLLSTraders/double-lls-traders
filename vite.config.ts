@@ -1,12 +1,20 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { copyFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-// GitHub Pages: https://doublellstraders.github.io/double-lls-traders/
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Custom domain (doublellstraders.malimines.com) serves at site root → base "/".
+// Project URL path /double-lls-traders/ only when building without a custom domain.
 const PAGES_REPO = process.env.GITHUB_PAGES_REPO ?? "double-lls-traders";
 const isPagesBuild = process.env.GITHUB_PAGES === "true";
-const base = isPagesBuild ? `/${PAGES_REPO}/` : "/";
+const useCustomDomain =
+  process.env.GITHUB_PAGES_CUSTOM_DOMAIN === "true" ||
+  process.env.GITHUB_PAGES_CUSTOM_DOMAIN === "1";
+const base =
+  isPagesBuild && !useCustomDomain ? `/${PAGES_REPO}/` : "/";
 
 /** Prevent stale index.html after deploys; SPA fallback for deep links. */
 function githubPagesExtras(): Plugin {
@@ -27,7 +35,18 @@ function githubPagesExtras(): Plugin {
       const dist = resolve("dist");
       const index = resolve(dist, "index.html");
       if (existsSync(index)) {
+        // SPA fallback for client deep links.
         copyFileSync(index, resolve(dist, "404.html"));
+      }
+      // Ensure /admin/ works on Pages (trailing slash).
+      const adminHtml = resolve(dist, "admin.html");
+      const adminIndex = resolve(dist, "admin", "index.html");
+      if (existsSync(adminIndex) && !existsSync(adminHtml)) {
+        try {
+          copyFileSync(adminIndex, adminHtml);
+        } catch {
+          /* ignore */
+        }
       }
     },
   };
@@ -93,6 +112,14 @@ function legacyPathRedirect(): Plugin {
 export default defineConfig({
   base,
   plugins: [react(), legacyPathRedirect(), githubPagesExtras()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(__dirname, "index.html"),
+        admin: resolve(__dirname, "admin/index.html"),
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: false,

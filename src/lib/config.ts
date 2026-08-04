@@ -1,4 +1,5 @@
 import { APP_NAME } from "./brand";
+import { isClientRole } from "./appRole";
 
 export type AccountKind = "demo" | "real";
 export type TradingMode = "paper" | "live";
@@ -66,24 +67,35 @@ function readConfig(): AppConfig {
   };
   const { token, accountId } = accounts[account];
 
-  if (!demoToken && !realToken) {
-    errors.push(
-      "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
-    );
-  } else if (!token) {
-    errors.push(
-      account === "real"
-        ? "VITE_DERIV_TOKEN_REAL is empty while VITE_DERIV_ACCOUNT=real."
-        : "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
-    );
-  }
+  // Client desk uses Deriv OAuth — env PATs are optional (admin-only).
+  const clientDesk = (() => {
+    try {
+      return isClientRole();
+    } catch {
+      return false;
+    }
+  })();
 
-  if (!accountId) {
-    warnings.push(
-      account === "real"
-        ? "VITE_DERIV_REAL_ACCOUNT_ID is empty — the app will pick the first real account it finds."
-        : "VITE_DERIV_DEMO_ACCOUNT_ID is empty — the app will pick the first demo account it finds.",
-    );
+  if (!clientDesk) {
+    if (!demoToken && !realToken) {
+      errors.push(
+        "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
+      );
+    } else if (!token) {
+      errors.push(
+        account === "real"
+          ? "VITE_DERIV_TOKEN_REAL is empty while VITE_DERIV_ACCOUNT=real."
+          : "VITE_DERIV_TOKEN_DEMO is empty. Create a PAT on home.deriv.com with Trade scope.",
+      );
+    }
+
+    if (!accountId) {
+      warnings.push(
+        account === "real"
+          ? "VITE_DERIV_REAL_ACCOUNT_ID is empty — the app will pick the first real account it finds."
+          : "VITE_DERIV_DEMO_ACCOUNT_ID is empty — the app will pick the first demo account it finds.",
+      );
+    }
   }
 
   const mode: TradingMode = env.VITE_TRADING_MODE?.trim() === "live" ? "live" : "paper";

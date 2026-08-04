@@ -33,13 +33,19 @@
     "check-exposure": "tsx scripts/check-exposure.ts",
     "check-settle-stream": "tsx --env-file=.env scripts/check-settle-stream.ts",
     "check-demo-vs-real": "tsx --env-file=.env scripts/check-demo-vs-real.ts",
-    "check-beststake": "tsx --env-file=.env scripts/check-beststake.ts"
+    "check-beststake": "tsx --env-file=.env scripts/check-beststake.ts",
+    "check-overunder": "tsx --env-file=.env scripts/check-overunder.ts",
+    "check-plan-gate": "tsx --env-file=.env scripts/check-plan-gate.ts",
+    "research": "tsx --env-file=.env scripts/research-real.ts",
+    "atlas:smoke": "tsx scripts/atlas-smoke.ts",
+    "atlas:api": "cd atlas/api && python -m uvicorn app.main:app --reload --port 8787"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.5",
     "firebase": "^12.17.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
+    "lightweight-charts": "^4.2.0",
     "otpauth": "^9.5.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",

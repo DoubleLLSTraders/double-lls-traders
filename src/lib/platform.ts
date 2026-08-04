@@ -5,7 +5,11 @@ export const GITHUB_REPO = "double-lls-traders";
 export const GITHUB_REPO_URL = `https://github.com/${GITHUB_ORG}/${GITHUB_REPO}`;
 export const GITHUB_PAGES_HOST = `${GITHUB_ORG.toLowerCase()}.github.io`;
 export const GITHUB_PAGES_BASE = `/${GITHUB_REPO}/`;
-export const GITHUB_PAGES_URL = `https://${GITHUB_PAGES_HOST}${GITHUB_PAGES_BASE}`;
+/** Primary public URL (custom domain). */
+export const CUSTOM_DOMAIN = "doublellstraders.malimines.com";
+export const GITHUB_PAGES_URL = `https://${CUSTOM_DOMAIN}/`;
+/** Fallback project Pages URL. */
+export const GITHUB_PAGES_PROJECT_URL = `https://${GITHUB_PAGES_HOST}${GITHUB_PAGES_BASE}`;
 
 /** localStorage prefix — migrated once from legacy storage keys. */
 export const STORAGE_PREFIX = "double-lls";

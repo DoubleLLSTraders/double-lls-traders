@@ -13,6 +13,16 @@ export const MARKETS = [
   { symbol: "R_75", number: "75", name: "Volatility 75 Index", oneSecond: false },
 ] as const;
 
+/** Deriv 1-second volatility indices — analyzer / hunt use these only. */
+export const FAST_MARKETS = MARKETS.filter((market) => market.oneSecond);
+
+export function isOneSecondMarket(symbol: string): boolean {
+  return (
+    MARKETS.find((market) => market.symbol === symbol)?.oneSecond === true ||
+    symbol.startsWith("1HZ")
+  );
+}
+
 export function marketLabel(symbol: string): string {
   return MARKETS.find((market) => market.symbol === symbol)?.name ?? symbol;
 }
@@ -46,7 +56,10 @@ function MarketIcon({ number, oneSecond }: { number: string; oneSecond: boolean 
 
 export function MarketSelect({ value, onChange }: MarketSelectProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
-  const selected = MARKETS.find((market) => market.symbol === value) ?? MARKETS[6];
+  const selected =
+    MARKETS.find((market) => market.symbol === value) ??
+    FAST_MARKETS.find((market) => market.symbol === "1HZ75V") ??
+    FAST_MARKETS[0]!;
 
   return (
     <label className="control market-control">
@@ -61,9 +74,27 @@ export function MarketSelect({ value, onChange }: MarketSelectProps) {
         </summary>
 
         <div className="market-menu">
-          <div className="market-menu__head">Volatility indices</div>
+          <div className="market-menu__head">1s volatility (analyzer)</div>
           <div className="market-menu__list">
-            {MARKETS.map((market) => (
+            {FAST_MARKETS.map((market) => (
+              <button
+                type="button"
+                key={market.symbol}
+                className={`market-option ${market.symbol === value ? "market-option--selected" : ""}`}
+                onClick={() => {
+                  onChange(market.symbol);
+                  detailsRef.current?.removeAttribute("open");
+                }}
+              >
+                <MarketIcon number={market.number} oneSecond={market.oneSecond} />
+                <span className="market-option__name">{market.name}</span>
+                <span className="market-option__star" aria-hidden="true">☆</span>
+              </button>
+            ))}
+          </div>
+          <div className="market-menu__head">Standard (slower)</div>
+          <div className="market-menu__list">
+            {MARKETS.filter((market) => !market.oneSecond).map((market) => (
               <button
                 type="button"
                 key={market.symbol}

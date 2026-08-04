@@ -1,5 +1,6 @@
 import { analyzerAllowsEntry } from "../analysis/analyzerGate";
-import type { MarketSignal } from "../analysis/signal";
+import { isOverUnderSide, sideLabel } from "../analysis/contractSide";
+import type { ContractSide, MarketSignal } from "../analysis/signal";
 import { confirmScore, isArmedSignal } from "../analysis/signal";
 import { isLowPayoutSymbol, profitRate } from "./performance";
 import type { BotSettings } from "./types";
@@ -47,8 +48,9 @@ export function nextTradeDoubt(
   if (!signal.barrierAligned) {
     return {
       doubtful: true,
-      reason:
-        signal.side === "DIGITMATCH"
+      reason: isOverUnderSide(signal.side)
+        ? `Doubt · ${sideLabel(signal.side)} ${signal.digit} barrier not aligned`
+        : signal.side === "DIGITMATCH"
           ? `Doubt · Matches ${signal.digit} is not the hot pick`
           : `Doubt · Differs ${signal.digit} is not the cold barrier`,
     };
@@ -57,9 +59,9 @@ export function nextTradeDoubt(
     return {
       doubtful: true,
       reason:
-        signal.side === "DIGITMATCH"
-          ? `Doubt · momentum gap ${signal.watching.signalGap ?? "—"} > ${settings.maxMomentumGap}`
-          : `Doubt · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap}`,
+        signal.side === "DIGITDIFF"
+          ? `Doubt · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap}`
+          : `Doubt · momentum gap ${signal.watching.signalGap ?? "—"} > ${settings.maxMomentumGap}`,
     };
   }
   if (signal.side === "DIGITDIFF") {
@@ -202,8 +204,9 @@ export function evaluateEntry(
     if (!signal.barrierAligned) {
       return {
         ok: false,
-        reason:
-          signal.side === "DIGITMATCH"
+        reason: isOverUnderSide(signal.side)
+          ? `Skip · ${sideLabel(signal.side)} ${signal.digit} barrier not aligned`
+          : signal.side === "DIGITMATCH"
             ? `Skip · Matches ${signal.digit} is not the hot pick (hot: ${signal.watching.hot})`
             : `Skip · Differs ${signal.digit} is not the cold barrier (cold: ${signal.watching.cold})`,
       };
@@ -240,9 +243,9 @@ export function evaluateEntry(
         reason:
           // signal.side, not settings.side: on auto the setting trails by a
           // render and would label the skip with the wrong contract type.
-          signal.side === "DIGITMATCH"
-            ? `Skip · momentum gap ${signal.watching.signalGap ?? "—"} > ${settings.maxMomentumGap}`
-            : `Skip · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap}`,
+          signal.side === "DIGITDIFF"
+            ? `Skip · cold gap ${signal.watching.signalGap ?? "—"} < ${settings.minColdGap}`
+            : `Skip · momentum gap ${signal.watching.signalGap ?? "—"} > ${settings.maxMomentumGap}`,
       };
     }
     if (settings.requireUneven && !signal.structureOk) {
@@ -306,13 +309,14 @@ export interface RecoveryPlan {
  */
 export function recoveryStake(
   deficit: number,
-  side: "DIGITMATCH" | "DIGITDIFF",
+  side: ContractSide,
   contracts: number,
   baseStake: number,
   maxStake: number,
+  barrier?: number,
 ): RecoveryPlan {
   const legs = Math.max(1, contracts);
-  const rate = profitRate(side);
+  const rate = profitRate(side, barrier);
   const baseProfit = baseStake * legs * rate;
   const needExposure = (deficit + baseProfit) / rate;
   const wanted = Number((needExposure / legs).toFixed(2));

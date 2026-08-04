@@ -6,14 +6,24 @@ import type {
   OptionsAccount,
 } from "./types";
 
+export type DerivTransport = "otp" | "oauth" | "public";
+
 export interface DerivClientOptions {
   appId: string;
   restUrl: string;
   token: string;
   accountId: string;
+  /**
+   * otp — PAT + REST OTP URL (admin / env tokens).
+   * oauth — classic WS + authorize (client Deriv OAuth tokens).
+   * public — classic WS, ticks only (visitor preview, no balance).
+   */
+  transport?: DerivTransport;
   /** Fail a pending request if Deriv has not answered within this many ms. */
   requestTimeoutMs?: number;
 }
+
+const CLASSIC_WS = "wss://ws.derivws.com/websockets/v3";
 
 type Handler<T> = (value: T) => void;
 
@@ -27,6 +37,17 @@ interface ActiveSubscription {
   request: Record<string, unknown>;
   handler: Handler<BaseResponse>;
   subscriptionId?: string;
+  /** Stopped before Deriv sent its id — forget the stream once it arrives. */
+  cancelled?: boolean;
+}
+
+/** Stream family a request belongs to, for `forget_all` recovery. */
+function streamTypeOf(request: Record<string, unknown>): string | null {
+  if ("ticks_history" in request || "ticks" in request) return "ticks";
+  if ("proposal_open_contract" in request) return "proposal_open_contract";
+  if ("proposal" in request) return "proposal";
+  if ("balance" in request) return "balance";
+  return null;
 }
 
 export class DerivApiError extends Error {
@@ -50,7 +71,9 @@ const MAX_BACKOFF_MS = 30_000;
  * On reconnect it always mints a fresh OTP — they expire quickly.
  */
 export class DerivClient {
-  private readonly options: Required<DerivClientOptions>;
+  private readonly options: Required<
+    Omit<DerivClientOptions, "transport">
+  > & { transport: DerivTransport };
   private socket: WebSocket | null = null;
   private state: ConnectionState = "idle";
   private nextRequestId = 1;
@@ -67,7 +90,11 @@ export class DerivClient {
   account: OptionsAccount | null = null;
 
   constructor(options: DerivClientOptions) {
-    this.options = { requestTimeoutMs: 20_000, ...options };
+    this.options = {
+      requestTimeoutMs: 20_000,
+      transport: "otp",
+      ...options,
+    };
   }
 
   getState(): ConnectionState {
@@ -113,7 +140,32 @@ export class DerivClient {
   async subscribe<T extends BaseResponse>(
     request: Record<string, unknown>,
     handler: Handler<T>,
-  ): Promise<() => void> {
+  ): Promise<() => Promise<void>> {
+    try {
+      const requestId = await this.openStream<T>(request, handler);
+      return () => this.unsubscribe(requestId);
+    } catch (error) {
+      // A stream from an earlier mount or a torn-down socket can outlive its
+      // handler, and Deriv then rejects the next subscribe to that symbol with
+      // AlreadySubscribed. Drop the orphan and try once more.
+      const streamType = streamTypeOf(request);
+      if (
+        !(error instanceof DerivApiError) ||
+        error.code !== "AlreadySubscribed" ||
+        streamType === null
+      ) {
+        throw error;
+      }
+      await this.forgetAll(streamType);
+      const requestId = await this.openStream<T>(request, handler);
+      return () => this.unsubscribe(requestId);
+    }
+  }
+
+  private async openStream<T extends BaseResponse>(
+    request: Record<string, unknown>,
+    handler: Handler<T>,
+  ): Promise<number> {
     const requestId = this.nextRequestId++;
     this.subscriptions.set(requestId, {
       request,
@@ -127,19 +179,37 @@ export class DerivClient {
       throw error;
     }
 
-    return () => void this.unsubscribe(requestId);
+    return requestId;
   }
 
   private async unsubscribe(requestId: number): Promise<void> {
     const subscription = this.subscriptions.get(requestId);
-    if (!subscription) return;
+    if (!subscription || subscription.cancelled) return;
+
+    if (!subscription.subscriptionId) {
+      // Deriv has not answered yet, so there is no id to forget. Dropping the
+      // entry now would strand the stream server-side and the next subscribe
+      // to this symbol would fail — flag it and forget when the id lands.
+      subscription.cancelled = true;
+      return;
+    }
 
     this.subscriptions.delete(requestId);
-    if (subscription.subscriptionId && this.state === "ready") {
-      await this.send({ forget: subscription.subscriptionId }).catch(() => {
-        // A dropped socket already invalidated the subscription server-side.
-      });
-    }
+    await this.forget(subscription.subscriptionId);
+  }
+
+  private async forget(subscriptionId: string): Promise<void> {
+    if (this.state !== "ready") return;
+    await this.send({ forget: subscriptionId }).catch(() => {
+      // A dropped socket already invalidated the subscription server-side.
+    });
+  }
+
+  private async forgetAll(streamType: string): Promise<void> {
+    if (this.state !== "ready") return;
+    await this.send({ forget_all: streamType }).catch(() => {
+      // Nothing to clear, or the socket went away — the retry will report it.
+    });
   }
 
   private async openSocket(): Promise<void> {
@@ -148,14 +218,19 @@ export class DerivClient {
     this.setState(this.reconnectAttempts > 0 ? "reconnecting" : "authorizing");
 
     try {
-      const url = await requestSocketUrl(
-        {
-          appId: this.options.appId,
-          restUrl: this.options.restUrl,
-          token: this.options.token,
-        },
-        this.options.accountId,
-      );
+      let url: string;
+      if (this.options.transport === "otp") {
+        url = await requestSocketUrl(
+          {
+            appId: this.options.appId,
+            restUrl: this.options.restUrl,
+            token: this.options.token,
+          },
+          this.options.accountId,
+        );
+      } else {
+        url = `${CLASSIC_WS}?app_id=${encodeURIComponent(this.options.appId)}`;
+      }
 
       if (generation !== this.connectGeneration || this.closedByUser) return;
 
@@ -202,10 +277,41 @@ export class DerivClient {
   private async handleOpen(generation: number): Promise<void> {
     if (generation !== this.connectGeneration || this.closedByUser) return;
 
-    this.reconnectAttempts = 0;
-    this.setState("ready");
-    this.startHeartbeat();
-    await this.restoreSubscriptions();
+    try {
+      if (this.options.transport === "oauth" && this.options.token) {
+        const auth = await this.dispatch<{
+          authorize?: {
+            loginid?: string;
+            balance?: number;
+            currency?: string;
+            is_virtual?: number | boolean;
+          };
+        }>({ authorize: this.options.token });
+        const a = auth.authorize;
+        if (a) {
+          this.account = {
+            accountId: a.loginid ?? this.options.accountId,
+            balance: Number(a.balance ?? 0),
+            currency: a.currency ?? "USD",
+            isVirtual: Boolean(a.is_virtual),
+            status: "active",
+          };
+        }
+      }
+      if (generation !== this.connectGeneration || this.closedByUser) return;
+      this.reconnectAttempts = 0;
+      this.setState("ready");
+      this.startHeartbeat();
+      await this.restoreSubscriptions();
+    } catch (error) {
+      if (generation !== this.connectGeneration || this.closedByUser) return;
+      this.emitError(error instanceof Error ? error : new Error(String(error)));
+      try {
+        this.socket?.close();
+      } catch {
+        this.scheduleReconnect();
+      }
+    }
   }
 
   private async restoreSubscriptions(): Promise<void> {
@@ -213,6 +319,7 @@ export class DerivClient {
     this.subscriptions.clear();
 
     for (const [, subscription] of entries) {
+      if (subscription.cancelled) continue;
       const requestId = this.nextRequestId++;
       this.subscriptions.set(requestId, {
         request: subscription.request,
@@ -241,8 +348,14 @@ export class DerivClient {
     if (subscription) {
       if (message.subscription?.id) {
         subscription.subscriptionId = message.subscription.id;
+        // Stopped while the subscribe was still in flight — close the stream
+        // now that Deriv has named it.
+        if (subscription.cancelled) {
+          this.subscriptions.delete(requestId);
+          void this.forget(message.subscription.id);
+        }
       }
-      if (!message.error) {
+      if (!message.error && !subscription.cancelled) {
         subscription.handler(message);
       }
     }

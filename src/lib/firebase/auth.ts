@@ -6,7 +6,7 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import { GITHUB_PAGES_HOST } from "../platform";
+import { CUSTOM_DOMAIN, GITHUB_PAGES_HOST } from "../platform";
 import { getFirebaseApp, readFirebaseConfig } from "./config";
 
 /** Firebase Console → Authentication → Settings (authorized domains). */
@@ -18,11 +18,9 @@ export function getFirebaseAuthSettingsUrl(): string | null {
 
 /** Domains that must appear under Firebase Auth → Authorized domains. */
 export function requiredFirebaseAuthDomains(): string[] {
-  const domains = ["localhost"];
+  const domains = ["localhost", GITHUB_PAGES_HOST, CUSTOM_DOMAIN];
   if (typeof window !== "undefined" && window.location.hostname) {
     domains.push(window.location.hostname);
-  } else {
-    domains.push(GITHUB_PAGES_HOST);
   }
   return [...new Set(domains)];
 }

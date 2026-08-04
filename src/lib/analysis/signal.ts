@@ -12,7 +12,21 @@ import {
   breakEvenDigitPercent,
 } from "../bot/performance";
 
-export type ContractSide = "DIGITMATCH" | "DIGITDIFF";
+export type ContractSide =
+  | "DIGITMATCH"
+  | "DIGITDIFF"
+  | "DIGITOVER"
+  | "DIGITUNDER";
+
+export type { TradeDesk } from "./contractSide";
+export {
+  contractWon,
+  deskOf,
+  isDigitsSide,
+  isOverUnderSide,
+  sideLabel,
+  sideShort,
+} from "./contractSide";
 
 /** Win-rate % needed for Matches to break even at ×MATCH payout. */
 export const MATCH_BREAK_EVEN_PCT = (1 / MATCH_PAYOUT_MULTIPLIER) * 100;
@@ -58,6 +72,13 @@ export interface MarketSignal {
   primaryBarrier: boolean;
   /** Signal digit clears EV while the runner-up does not — unique edge, not a pack. */
   uniqueEvOk: boolean;
+  /**
+   * Over/Under: search-corrected lower bound on the win rate clears the payout
+   * break-even. Momentum can rank a barrier; only this certifies one.
+   */
+  proven?: boolean;
+  /** Human-readable verdict behind `proven`. */
+  provenLabel?: string;
   watching: {
     lastDigit: number | null;
     streak: string;
@@ -277,7 +298,7 @@ function separationLabel(
  */
 export function buildMarketSignal(
   stats: DigitStats,
-  preferredSide: ContractSide,
+  preferredSide: "DIGITMATCH" | "DIGITDIFF",
   fallbackDigit: number,
   options: SignalOptions = {},
 ): MarketSignal {

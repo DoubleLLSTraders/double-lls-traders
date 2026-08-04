@@ -1,0 +1,10 @@
+{
+  "name": "atlas-web",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Atlas standalone web entry. V1 UI is embedded in the main Vite app (src/hubs/atlas). This package documents the API client contract.",
+  "type": "module",
+  "scripts": {
+    "dev:note": "echo Use the main app npm run dev and Settings - Hub - Atlas"
+  }
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useAppAuth } from "../context/AuthContext";
+import { useOptionalAppAuth } from "../context/AuthContext";
 import { accountCredentials, getAccountKind, setAccountKind } from "../lib/accountMode";
 import {
   AUTH_LOCKOUT_MS,
@@ -26,8 +26,19 @@ import type { OptionsAccount } from "../lib/deriv/types";
 import {
   BOT_PROFILE_VERSION,
   BOT_SETTINGS_VERSION,
+  MATCHES_PROFILE_VERSION,
+  OVER_UNDER_VERSION,
   botVersionLabel,
 } from "../lib/bot/version";
+import type { TradeDesk } from "../lib/analysis/contractSide";
+import {
+  getActiveHub,
+  getHubDisplayName,
+  setActiveHub,
+  setHubDisplayName,
+  type HubId,
+} from "../lib/hub";
+import { DeskSwitch } from "./DeskSwitch";
 import { SystemStatusPanel } from "./SystemStatusPanel";
 
 interface SettingsModalProps {
@@ -39,9 +50,19 @@ interface SettingsModalProps {
   initialTab?: SettingsTab;
   feedState: ConnectionState;
   feedError: string | null;
+  /** Active trade desk — Digits or Over/Under. */
+  tradeDesk: TradeDesk;
+  /** Switch Digits ↔ Over/Under (applies the matching bot profile). */
+  onSelectDesk?: (desk: TradeDesk) => void;
+  /** Fired after the active hub is persisted (digits desk vs Atlas). */
+  onHubChange?: (hub: import("../lib/hub").HubId) => void;
+  /** Hide Digits-only desk controls when Atlas settings are open. */
+  hubMode?: "digits" | "atlas";
+  /** Public client desk — hide admin hub / Google profile tabs. */
+  clientMode?: boolean;
 }
 
-export type SettingsTab = "profile" | "security" | "trading" | "status";
+export type SettingsTab = "profile" | "security" | "trading" | "hub" | "status";
 
 function formatDateTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -71,10 +92,15 @@ export function SettingsModal({
   initialTab = "profile",
   feedState,
   feedError,
+  tradeDesk,
+  onSelectDesk,
+  onHubChange,
+  hubMode = "digits",
+  clientMode = false,
 }: SettingsModalProps) {
   const active = getAccountKind();
-  const auth = useAppAuth();
-  const [tab, setTab] = useState<SettingsTab>("profile");
+  const auth = useOptionalAppAuth();
+  const [tab, setTab] = useState<SettingsTab>(clientMode ? "trading" : "profile");
   const [accounts, setAccounts] = useState<OptionsAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -82,6 +108,8 @@ export function SettingsModal({
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [liveVerifyOpen, setLiveVerifyOpen] = useState(false);
+  const [hubNameDraft, setHubNameDraft] = useState(() => getHubDisplayName());
+  const [activeHubDraft, setActiveHubDraft] = useState(() => getActiveHub());
 
   useEffect(() => {
     if (!open) {
@@ -90,14 +118,16 @@ export function SettingsModal({
       return;
     }
 
-    setTab(initialTab);
+    setTab(clientMode ? "trading" : initialTab);
+    setHubNameDraft(getHubDisplayName());
+    setActiveHubDraft(getActiveHub());
 
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(timer);
-  }, [open, initialTab]);
+  }, [open, initialTab, clientMode]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || clientMode) return;
 
     let cancelled = false;
     setLoadError(null);
@@ -105,6 +135,7 @@ export function SettingsModal({
     void (async () => {
       try {
         const token = accountCredentials(active).token || config.token;
+        if (!token) return;
         const found = await listAccounts({
           appId: config.appId,
           restUrl: config.restUrl,
@@ -121,10 +152,10 @@ export function SettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [open, active]);
+  }, [open, active, clientMode]);
 
   useEffect(() => {
-    if (!open || !auth.session?.email) {
+    if (!open || !auth?.session?.email) {
       setTotpRecord(null);
       setSecurityError(null);
       return;
@@ -132,10 +163,11 @@ export function SettingsModal({
 
     let cancelled = false;
     setSecurityError(null);
+    const email = auth.session.email;
 
     void (async () => {
       try {
-        const record = await fetchTotpRecord(auth.session!.email);
+        const record = await fetchTotpRecord(email);
         if (!cancelled) setTotpRecord(record);
       } catch (error) {
         if (!cancelled) {
@@ -147,15 +179,15 @@ export function SettingsModal({
     return () => {
       cancelled = true;
     };
-  }, [open, auth.session?.email]);
+  }, [open, auth?.session?.email]);
 
   const sessionRemaining = useMemo(() => {
-    if (!auth.session) return null;
+    if (!auth?.session) return null;
     return auth.session.expiresAt - now;
-  }, [auth.session, now]);
+  }, [auth?.session, now]);
 
   const lockout = useMemo(() => {
-    if (!auth.session?.email) return null;
+    if (!auth?.session?.email) return null;
     return isAuthLocked(auth.session.email);
   }, [auth.session?.email, now]);
 
@@ -211,20 +243,24 @@ export function SettingsModal({
 
         <div className="settings-modal__layout">
           <nav className="settings-modal__nav" aria-label="Settings sections">
-            <button
-              type="button"
-              className={`settings-modal__nav-btn ${tab === "profile" ? "is-active" : ""}`}
-              onClick={() => setTab("profile")}
-            >
-              Profile
-            </button>
-            <button
-              type="button"
-              className={`settings-modal__nav-btn ${tab === "security" ? "is-active" : ""}`}
-              onClick={() => setTab("security")}
-            >
-              Security
-            </button>
+            {!clientMode ? (
+              <button
+                type="button"
+                className={`settings-modal__nav-btn ${tab === "profile" ? "is-active" : ""}`}
+                onClick={() => setTab("profile")}
+              >
+                Profile
+              </button>
+            ) : null}
+            {!clientMode ? (
+              <button
+                type="button"
+                className={`settings-modal__nav-btn ${tab === "security" ? "is-active" : ""}`}
+                onClick={() => setTab("security")}
+              >
+                Security
+              </button>
+            ) : null}
             <button
               type="button"
               className={`settings-modal__nav-btn ${tab === "trading" ? "is-active" : ""}`}
@@ -232,6 +268,15 @@ export function SettingsModal({
             >
               Trading
             </button>
+            {!clientMode ? (
+              <button
+                type="button"
+                className={`settings-modal__nav-btn ${tab === "hub" ? "is-active" : ""}`}
+                onClick={() => setTab("hub")}
+              >
+                Hub
+              </button>
+            ) : null}
             <button
               type="button"
               className={`settings-modal__nav-btn ${tab === "status" ? "is-active" : ""}`}
@@ -242,11 +287,11 @@ export function SettingsModal({
           </nav>
 
           <div className="settings-modal__panel">
-            {tab === "profile" ? (
+            {!clientMode && tab === "profile" && auth ? (
               <ProfilePanel session={auth.session} sessionRemaining={sessionRemaining} />
             ) : null}
 
-            {tab === "security" ? (
+            {!clientMode && tab === "security" && auth ? (
               <SecurityPanel
                 email={auth.session?.email ?? null}
                 name={auth.session?.name ?? null}
@@ -279,8 +324,37 @@ export function SettingsModal({
                 onCancelLiveVerify={() => setLiveVerifyOpen(false)}
                 onChoose={choose}
                 onConfirmLiveSwitch={confirmLiveSwitch}
-                email={auth.session?.email ?? null}
+                email={auth?.session?.email ?? null}
                 totpRecord={totpRecord}
+                tradeDesk={tradeDesk}
+                onSelectDesk={onSelectDesk ?? (() => {})}
+                showDeskSwitch={!clientMode && hubMode === "digits" && !!onSelectDesk}
+                clientMode={clientMode}
+              />
+            ) : null}
+
+            {!clientMode && tab === "hub" ? (
+              <HubPanel
+                botRunning={botRunning}
+                activeHub={activeHubDraft}
+                hubName={hubNameDraft}
+                onHubNameChange={setHubNameDraft}
+                onSelectHub={(hub) => {
+                  if (botRunning && hub !== activeHubDraft) {
+                    const ok = window.confirm(
+                      "A bot or open trade is active. Stop it and switch hubs anyway?",
+                    );
+                    if (!ok) return;
+                  }
+                  setActiveHub(hub);
+                  setHubDisplayName(hubNameDraft);
+                  setActiveHubDraft(hub);
+                  onHubChange?.(hub);
+                  if (hub !== hubMode) onClose();
+                }}
+                onSaveName={() => {
+                  setHubDisplayName(hubNameDraft);
+                }}
               />
             ) : null}
 
@@ -288,7 +362,7 @@ export function SettingsModal({
               <SystemStatusPanel
                 feedState={feedState}
                 feedError={feedError}
-                email={auth.session?.email ?? null}
+                email={auth?.session?.email ?? null}
                 active={open && tab === "status"}
               />
             ) : null}
@@ -538,6 +612,10 @@ function TradingPanel({
   onConfirmLiveSwitch,
   email,
   totpRecord,
+  tradeDesk,
+  onSelectDesk,
+  showDeskSwitch = true,
+  clientMode = false,
 }: {
   active: AccountKind;
   botRunning: boolean;
@@ -553,88 +631,137 @@ function TradingPanel({
   onConfirmLiveSwitch: () => void;
   email: string | null;
   totpRecord: TotpRecord | null;
+  tradeDesk: TradeDesk;
+  onSelectDesk: (desk: TradeDesk) => void;
+  showDeskSwitch?: boolean;
+  clientMode?: boolean;
 }) {
   return (
     <section className="modal__section settings-modal__section">
+      {clientMode ? (
+        <p className="modal__note">
+          Over / Under desk · connect Demo or Live from the header after Deriv login.
+        </p>
+      ) : null}
+      {showDeskSwitch ? (
+      <div className="settings-desk-switch">
+        <DeskSwitch
+          value={tradeDesk}
+          disabled={botRunning}
+          onChange={onSelectDesk}
+        />
+        {botRunning ? (
+          <p className="modal__note">
+            Desk locked while a trade is open or settling — stop the bot to switch.
+          </p>
+        ) : (
+          <p className="modal__note">
+            Tap a desk → confirm → we sync live ticks and verify the contract on Deriv
+            (Over + Under proposals) before it goes live.
+          </p>
+        )}
+      </div>
+      ) : (
+        <p className="modal__note">
+          Atlas hub is active — Digits / Over-Under desk switch is hidden. Open the Hub
+          tab to return to the digits desk. Demo vs Live below still controls the Atlas
+          wallet (paper ledger vs real MULTUP/MULTDOWN).
+        </p>
+      )}
+
       <div className="settings-bot-version" aria-label={botVersionLabel()}>
         <strong>Bot version</strong>
         <span>v{BOT_SETTINGS_VERSION}</span>
-        <em>Differs profile v{BOT_PROFILE_VERSION}</em>
-        <p>HIGH · cool hostile tape · pause after loss · hunt markets · firm at wire</p>
+        <em>
+          Differs v{BOT_PROFILE_VERSION} · Matches firm v{MATCHES_PROFILE_VERSION} · O/U v
+          {OVER_UNDER_VERSION}
+        </em>
+        <p>
+          {tradeDesk === "overunder"
+            ? "BLITZ · Over/Under high-hit barriers · prove ~2s · same-tick buy"
+            : "HIGH · Differs Steady/Safer+fast or Matches firm (hunt best hot) · same-tick buy"}
+        </p>
       </div>
 
-      <h3>Deriv account</h3>
+      {!clientMode ? <h3>Deriv account</h3> : null}
+      {!clientMode ? (
       <p className="modal__note">
-        Switching reconnects the feed and reloads the balance. Trade history stays. Moving to{" "}
-        <strong>Live</strong> requires Google Authenticator verification.
+        Switching reconnects Digits and Atlas feeds and reloads the balance. Atlas Demo uses a
+        practice ledger; Atlas Live places real MULTUP/MULTDOWN on your wallet. Trade history
+        stays. Moving to <strong>Live</strong> requires Google Authenticator verification.
       </p>
+      ) : null}
 
-      {liveVerifyOpen ? (
-        <LiveSwitchVerify
-          email={email}
-          totpRecord={totpRecord}
-          onCancel={onCancelLiveVerify}
-          onVerified={onConfirmLiveSwitch}
-        />
-      ) : (
-        <>
-          <div className="acctpick">
-            <AccountOption
-              kind="demo"
-              label="Demo"
-              detail="Practice money. Nothing at risk."
-              account={demoAccount}
-              active={active === "demo"}
-              disabled={botRunning}
-              onSelect={onChoose}
-            />
-            <AccountOption
-              kind="real"
-              label="Live"
-              detail="Real money. Every loss is yours."
-              account={realAccount}
-              active={active === "real"}
-              disabled={botRunning || !acknowledged}
-              onSelect={onChoose}
-            />
-          </div>
-
-          {loadError ? <p className="modal__error">Could not read accounts · {loadError}</p> : null}
-
-          {accounts && !realAccount ? (
-            <p className="modal__error">
-              This token cannot see a real account. Add one on Deriv, or set VITE_DERIV_TOKEN_REAL in
-              .env.
-            </p>
-          ) : null}
-
-          {realAccount && realAccount.balance <= 0 && active !== "real" ? (
-            <p className="modal__warn">
-              The live account holds {realAccount.balance.toFixed(2)} {realAccount.currency}. Trades
-              will be rejected until it is funded.
-            </p>
-          ) : null}
-
-          {active !== "real" ? (
-            <label className="modal__ack">
-              <input
-                type="checkbox"
-                checked={acknowledged}
+      {!clientMode ? (
+        liveVerifyOpen ? (
+          <LiveSwitchVerify
+            email={email}
+            totpRecord={totpRecord}
+            onCancel={onCancelLiveVerify}
+            onVerified={onConfirmLiveSwitch}
+          />
+        ) : (
+          <>
+            <div className="acctpick">
+              <AccountOption
+                kind="demo"
+                label="Demo"
+                detail="Practice money. Atlas papers; Digits use demo wallet."
+                account={demoAccount}
+                active={active === "demo"}
                 disabled={botRunning}
-                onChange={(event) => setAcknowledged(event.target.checked)}
+                onSelect={onChoose}
               />
-              <span>
-                I understand live trading risks real money, and that this bot runs at a negative
-                expected value of about −1.3% per trade.
-              </span>
-            </label>
-          ) : null}
+              <AccountOption
+                kind="real"
+                label="Live"
+                detail="Real money. Atlas multipliers + Digits contracts on your wallet."
+                account={realAccount}
+                active={active === "real"}
+                disabled={botRunning || !acknowledged}
+                onSelect={onChoose}
+              />
+            </div>
 
-          {botRunning ? (
-            <p className="modal__warn">Stop the bot before switching accounts.</p>
-          ) : null}
-        </>
-      )}
+            {loadError ? (
+              <p className="modal__error">Could not read accounts · {loadError}</p>
+            ) : null}
+
+            {accounts && !realAccount ? (
+              <p className="modal__error">
+                This token cannot see a real account. Add one on Deriv, or set
+                VITE_DERIV_TOKEN_REAL in .env.
+              </p>
+            ) : null}
+
+            {realAccount && realAccount.balance <= 0 && active !== "real" ? (
+              <p className="modal__warn">
+                The live account holds {realAccount.balance.toFixed(2)}{" "}
+                {realAccount.currency}. Trades will be rejected until it is funded.
+              </p>
+            ) : null}
+
+            {active !== "real" ? (
+              <label className="modal__ack">
+                <input
+                  type="checkbox"
+                  checked={acknowledged}
+                  disabled={botRunning}
+                  onChange={(event) => setAcknowledged(event.target.checked)}
+                />
+                <span>
+                  I understand live trading risks real money, and that this bot runs
+                  at a negative expected value of about −1.3% per trade.
+                </span>
+              </label>
+            ) : null}
+
+            {botRunning ? (
+              <p className="modal__warn">Stop the bot before switching accounts.</p>
+            ) : null}
+          </>
+        )
+      ) : null}
     </section>
   );
 }
@@ -784,5 +911,93 @@ function AccountOption({
       <small className="acctpick__id">{account?.accountId ?? "not available"}</small>
       <small className="acctpick__detail">{detail}</small>
     </button>
+  );
+}
+
+function HubPanel({
+  botRunning,
+  activeHub,
+  hubName,
+  onHubNameChange,
+  onSelectHub,
+  onSaveName,
+}: {
+  botRunning: boolean;
+  activeHub: HubId;
+  hubName: string;
+  onHubNameChange: (name: string) => void;
+  onSelectHub: (hub: HubId) => void;
+  onSaveName: () => void;
+}) {
+  return (
+    <section className="modal__section settings-modal__section">
+      <h3>Workspace hub</h3>
+      <p className="modal__note">
+        Switch between the Digits desk and the Atlas real-markets hub (Gold, Forex,
+        Crypto). Atlas is isolated — it never shares bot state with Matches / Over-Under.
+      </p>
+
+      <div className="acctpick" role="group" aria-label="Active hub">
+        <button
+          type="button"
+          className={`acctpick__card ${activeHub === "digits" ? "is-active" : ""}`}
+          aria-pressed={activeHub === "digits"}
+          onClick={() => onSelectHub("digits")}
+        >
+          <span className="acctpick__label">
+            Digits desk
+            {activeHub === "digits" ? <em>Current</em> : null}
+          </span>
+          <strong className="acctpick__balance">Matches · Differs · O/U</strong>
+          <small className="acctpick__detail">
+            Synthetic last-digit contracts on Volatility indices.
+          </small>
+        </button>
+        <button
+          type="button"
+          className={`acctpick__card ${activeHub === "atlas" ? "is-active" : ""}`}
+          aria-pressed={activeHub === "atlas"}
+          onClick={() => onSelectHub("atlas")}
+        >
+          <span className="acctpick__label">
+            {hubName.trim() || "Atlas"}
+            {activeHub === "atlas" ? <em>Current</em> : null}
+          </span>
+          <strong className="acctpick__balance">Gold · FX · Crypto</strong>
+          <small className="acctpick__detail">
+            Real-market charts, signals, risk gates, and paper execution via Deriv.
+          </small>
+        </button>
+      </div>
+
+      {botRunning ? (
+        <p className="modal__note">
+          Tip: if a trade is open, confirm the switch — Atlas will stop the bot
+          when you leave.
+        </p>
+      ) : null}
+
+      <label className="bot-field" style={{ marginTop: "1rem", display: "block" }}>
+        <span>Atlas display name</span>
+        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
+          <input
+            type="text"
+            value={hubName}
+            maxLength={40}
+            onChange={(event) => onHubNameChange(event.target.value)}
+            placeholder="Atlas"
+            aria-label="Atlas display name"
+          />
+          <button type="button" className="btn btn--ghost" onClick={onSaveName}>
+            Save name
+          </button>
+        </div>
+      </label>
+
+      <p className="modal__note" style={{ marginTop: "1rem" }}>
+        No guaranteed profits. Every Atlas recommendation includes confidence, risk, and
+        an explanation. Auto-trade stays blocked until risk rules pass.
+      </p>
+    </section>
   );
 }

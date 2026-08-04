@@ -1,5 +1,7 @@
 import { clearLiveAccess, hasLiveAccess } from "./auth/store";
+import { isClientRole } from "./appRole";
 import { config, type AccountKind } from "./config";
+import { getSelectedOauthAccount } from "./deriv/oauth";
 import { storageKey } from "./platform";
 
 /**
@@ -37,8 +39,8 @@ function read(): AccountKind {
 
 let current: AccountKind = read();
 
-/** Real account without 2FA must not persist — force demo on load. */
-if (current === "real" && !hasLiveAccess()) {
+/** Real account without 2FA must not persist — force demo on load (admin only). */
+if (current === "real" && !hasLiveAccess() && !isClientRole()) {
   current = "demo";
   try {
     localStorage.setItem(KEY, "demo");
@@ -50,7 +52,11 @@ if (current === "real" && !hasLiveAccess()) {
 const listeners = new Set<() => void>();
 
 export function getAccountKind(): AccountKind {
-  if (current === "real" && !hasLiveAccess()) {
+  if (isClientRole()) {
+    const oauth = getSelectedOauthAccount();
+    if (oauth) return oauth.kind;
+  }
+  if (current === "real" && !hasLiveAccess() && !isClientRole()) {
     return "demo";
   }
   return current;
@@ -59,11 +65,12 @@ export function getAccountKind(): AccountKind {
 export function setAccountKind(kind: AccountKind): boolean {
   if (kind === current) return true;
 
-  if (kind === "real" && !hasLiveAccess()) {
+  // Client OAuth already proved possession of the Deriv account — no TOTP gate.
+  if (kind === "real" && !hasLiveAccess() && !isClientRole()) {
     return false;
   }
 
-  if (kind === "demo") {
+  if (kind === "demo" && !isClientRole()) {
     clearLiveAccess();
   }
 
@@ -94,6 +101,24 @@ export function subscribeAccountKind(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export function accountCredentials(kind: AccountKind) {
-  return config.accounts[kind];
+export function accountCredentials(kind: AccountKind): {
+  token: string;
+  accountId: string;
+  transport: "otp" | "oauth" | "public";
+} {
+  // Client desk: Deriv OAuth session wins over env PATs.
+  if (isClientRole()) {
+    const oauth = getSelectedOauthAccount();
+    if (oauth) {
+      return {
+        token: oauth.token,
+        accountId: oauth.loginid,
+        transport: "oauth",
+      };
+    }
+    // Visitor preview — public ticks only (no balance / buy).
+    return { token: "", accountId: "", transport: "public" };
+  }
+  const base = config.accounts[kind];
+  return { ...base, transport: "otp" as const };
 }

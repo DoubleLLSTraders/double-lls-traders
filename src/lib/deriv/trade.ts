@@ -52,6 +52,8 @@ export async function proposeDigitContract(
     basis: "stake",
     contract_type: input.side,
     currency: input.currency,
+    // Classic OAuth WS uses `symbol`; Options OTP path accepts `underlying_symbol`.
+    symbol: input.symbol,
     underlying_symbol: input.symbol,
     duration: input.duration,
     duration_unit: "t",
@@ -94,6 +96,7 @@ export async function buyDigitContract(
       basis: "stake",
       contract_type: input.side,
       currency: input.currency,
+      symbol: input.symbol,
       underlying_symbol: input.symbol,
       duration: input.duration,
       duration_unit: "t",
@@ -118,6 +121,14 @@ interface OpenContractResponse extends BaseResponse {
     status: string;
     /** Quote of the tick that decided the contract, already at pip precision. */
     exit_spot?: string;
+    entry_spot?: number | string;
+    entry_tick?: number | string;
+    exit_tick?: number | string;
+    /** Unix epoch seconds for entry / exit ticks when present. */
+    entry_tick_time?: number;
+    exit_tick_time?: number;
+    date_start?: number;
+    purchase_time?: number;
   };
 }
 
@@ -125,31 +136,30 @@ export interface ContractOutcome {
   profit: number;
   /** Last digit of Deriv's exit tick — the digit the contract was judged on. */
   exitDigit: number | null;
+  /** Exit tick time (unix seconds) when Deriv reports it. */
+  exitEpoch: number | null;
+  /** Entry tick time (unix seconds) when Deriv reports it. */
+  entryEpoch: number | null;
 }
 
 /** Deriv already formats the quote to pip size, so the tail is the digit. */
-function digitOfQuote(display: string | undefined): number | null {
-  if (!display) return null;
-  const last = display.trim().slice(-1);
+function digitOfQuote(display: string | number | undefined): number | null {
+  if (display === undefined || display === null) return null;
+  const last = String(display).trim().slice(-1);
   return /[0-9]/.test(last) ? Number(last) : null;
 }
 
 /**
  * Resolves once Deriv marks the contract sold, with its realised profit.
  *
- * A 1-tick contract settles in about five seconds, but the subscription does
- * occasionally go quiet without ever sending the sold frame. The bot cannot
- * open another basket while one is outstanding, so a silent stream freezes it
- * completely — this is what "the bot is stuck" looked like. Alongside the
- * stream we therefore poll the same endpoint one-shot, and take whichever
- * answers first. Two independent paths to the same fact, so losing one is a
- * delay of a few seconds rather than a stall.
+ * 1-tick digit contracts settle in ~1–2s on 1s indices. Poll fast so the
+ * chart W/L is not stuck 2+ ticks behind waiting on a 4s timer.
  */
 export function waitForContractOutcome(
   client: DerivClient,
   contractId: number,
   timeoutMs = 45_000,
-  pollMs = 4_000,
+  pollMs = 400,
 ): Promise<ContractOutcome> {
   return new Promise<ContractOutcome>((resolve, reject) => {
     let done = false;
@@ -171,7 +181,21 @@ export function waitForContractOutcome(
       finish(() =>
         resolve({
           profit: Number(contract.profit),
-          exitDigit: digitOfQuote(contract.exit_spot),
+          exitDigit:
+            digitOfQuote(contract.exit_spot) ??
+            digitOfQuote(contract.exit_tick),
+          exitEpoch:
+            typeof contract.exit_tick_time === "number"
+              ? contract.exit_tick_time
+              : null,
+          entryEpoch:
+            typeof contract.entry_tick_time === "number"
+              ? contract.entry_tick_time
+              : typeof contract.date_start === "number"
+                ? contract.date_start
+                : typeof contract.purchase_time === "number"
+                  ? contract.purchase_time
+                  : null,
         }),
       );
     };
@@ -181,7 +205,7 @@ export function waitForContractOutcome(
       timeoutMs,
     );
 
-    poll = setInterval(() => {
+    const pollOnce = () => {
       if (done) return;
       client
         .send<OpenContractResponse>({ proposal_open_contract: 1, contract_id: contractId })
@@ -189,7 +213,10 @@ export function waitForContractOutcome(
         .catch(() => {
           // Transient; the stream or the next poll still has a chance.
         });
-    }, pollMs);
+    };
+
+    pollOnce();
+    poll = setInterval(pollOnce, pollMs);
 
     client
       .subscribe<OpenContractResponse>(
@@ -218,7 +245,13 @@ export function waitForContractOutcome(
 export async function waitForBasketOutcome(
   client: DerivClient,
   contractIds: number[],
-): Promise<{ won: boolean; profit: number; exitDigit: number | null }> {
+): Promise<{
+  won: boolean;
+  profit: number;
+  exitDigit: number | null;
+  exitEpoch: number | null;
+  entryEpoch: number | null;
+}> {
   const outcomes = await Promise.all(
     contractIds.map((id) => waitForContractOutcome(client, id)),
   );
@@ -227,7 +260,9 @@ export async function waitForBasketOutcome(
   );
   // Every leg of a basket rides the same tick, so the first exit is the basket's.
   const exitDigit = outcomes.find((o) => o.exitDigit !== null)?.exitDigit ?? null;
-  return { won: profit > 0, profit, exitDigit };
+  const exitEpoch = outcomes.find((o) => o.exitEpoch !== null)?.exitEpoch ?? null;
+  const entryEpoch = outcomes.find((o) => o.entryEpoch !== null)?.entryEpoch ?? null;
+  return { won: profit > 0, profit, exitDigit, exitEpoch, entryEpoch };
 }
 
 export interface BulkBuyResult {

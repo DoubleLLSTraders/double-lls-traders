@@ -1,3 +1,5 @@
+import type { ContractSide } from "./signal";
+
 export const DIGITS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 const DIGIT_COUNT = DIGITS.length;
 
@@ -195,7 +197,8 @@ export function coldBarrierMarginOk(
  */
 export function pickStableDigit(
   stats: DigitStats,
-  side: "DIGITMATCH" | "DIGITDIFF",
+  /** Over/Under barriers pick like Differs here — coldest side of the tape. */
+  side: ContractSide,
   fallback: number,
 ): number {
   if (side === "DIGITMATCH") {

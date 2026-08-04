@@ -35,9 +35,15 @@ function money(value: number): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
+function entrySideLabel(side: StoredTrade["side"]): string {
+  if (side === "DIGITMATCH") return "Matches";
+  if (side === "DIGITOVER") return "Over";
+  if (side === "DIGITUNDER") return "Under";
+  return "Differs";
+}
+
 function entryPointLines(trade: StoredTrade): { title: string; meta: string } {
-  const side = trade.side === "DIGITMATCH" ? "Matches" : "Differs";
-  const title = `${side} ${trade.digit}`;
+  const title = `${entrySideLabel(trade.side)} ${trade.digit}`;
   const parts: string[] = [];
   if (trade.entryGap !== null && trade.entryGap !== undefined) {
     parts.push(`gap ${trade.entryGap}`);
@@ -51,7 +57,8 @@ function entryPointLines(trade: StoredTrade): { title: string; meta: string } {
   if (trade.entrySpot !== undefined) {
     parts.push(`spot ${trade.entrySpot.toFixed(2)}`);
   }
-  if (trade.mode === "paper") parts.push("paper");
+  // Honest account label on the client dashboard.
+  parts.push(trade.mode === "paper" ? "demo" : "live");
   if (trade.note) parts.push(trade.note);
   return {
     title,
@@ -141,6 +148,43 @@ export function TradesPanel({
           >
             {exporting ? "Preparing PDF…" : "Download PDF"}
           </button>
+          <button
+            type="button"
+            className="trades__pdf"
+            disabled={trades.length === 0}
+            title="Save JSON for analysis (paste in chat after your run)"
+            onClick={() => {
+              const payload = {
+                exportedAt: new Date().toISOString(),
+                summary: {
+                  trades: totals.trades,
+                  wins: totals.wins,
+                  losses: totals.losses,
+                  pnl: totals.pnl,
+                  winRate: totals.winRate,
+                  expectancy: totals.expectancy,
+                  breakEvenWinRate: performance.breakEvenWinRate,
+                  currency,
+                  sessionPnl: session.pnl,
+                },
+                trades,
+              };
+              const blob = new Blob([JSON.stringify(payload, null, 2)], {
+                type: "application/json",
+              });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `mrnyc-trades-${new Date()
+                .toISOString()
+                .slice(0, 19)
+                .replace(/[:T]/g, "-")}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            Export JSON
+          </button>
           {trades.length > 0 ? (
             <button
               type="button"
@@ -196,8 +240,7 @@ export function TradesPanel({
         <div className="trades__open">
           <span className="trades__badge trades__badge--open">Open</span>
           <b>
-            ENTRY {open.side === "DIGITMATCH" ? "Matches" : "Differs"}{" "}
-            {open.digit}
+            ENTRY {entrySideLabel(open.side)} {open.digit}
           </b>
           <span>
             {open.contracts} × {open.stake.toFixed(2)} {currency}

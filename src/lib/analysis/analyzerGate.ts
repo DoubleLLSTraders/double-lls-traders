@@ -1,5 +1,6 @@
-import type { MarketSignal } from "./signal";
 import type { BotSettings } from "../bot/types";
+import { deskOf, isOverUnderSide, sideLabel } from "./contractSide";
+import type { MarketSignal } from "./signal";
 
 export type AnalyzerGateResult =
   | { ok: true; label: string }
@@ -24,11 +25,23 @@ export function analyzerAllowsEntry(
   const minSample = settings.minSample;
   const gap = signal.watching.signalGap;
 
+  if (deskOf(settings.side) !== deskOf(signal.side)) {
+    return {
+      ok: false,
+      reason: `Analyzer · waiting ${sideLabel(settings.side)} desk`,
+    };
+  }
   if (settings.side === "DIGITDIFF" && signal.side !== "DIGITDIFF") {
     return { ok: false, reason: "Analyzer · waiting Differs (not Matches)" };
   }
   if (settings.side === "DIGITMATCH" && signal.side !== "DIGITMATCH") {
     return { ok: false, reason: "Analyzer · waiting Matches" };
+  }
+  if (settings.side === "DIGITOVER" && signal.side !== "DIGITOVER") {
+    return { ok: false, reason: "Analyzer · waiting Over" };
+  }
+  if (settings.side === "DIGITUNDER" && signal.side !== "DIGITUNDER") {
+    return { ok: false, reason: "Analyzer · waiting Under" };
   }
   if (signal.watching.sampleSize < minSample) {
     return {
@@ -39,7 +52,9 @@ export function analyzerAllowsEntry(
   if (!signal.barrierAligned || !signal.primaryBarrier) {
     return {
       ok: false,
-      reason: `Analyzer · ${signal.digit} is not the #1 ${signal.side === "DIGITDIFF" ? "cold" : "hot"}`,
+      reason: isOverUnderSide(signal.side)
+        ? `Analyzer · barrier ${signal.digit} not aligned`
+        : `Analyzer · ${signal.digit} is not the #1 ${signal.side === "DIGITDIFF" ? "cold" : "hot"}`,
     };
   }
   if (!signal.evOk) {
@@ -77,11 +92,25 @@ export function analyzerAllowsEntry(
       };
     }
   }
+  if (isOverUnderSide(signal.side)) {
+    const momCap = Math.max(0, settings.maxMomentumGap);
+    if (gap === null || gap > momCap) {
+      return {
+        ok: false,
+        reason: `Analyzer · gap ${gap ?? "—"}/≤${momCap} · not Good yet`,
+      };
+    }
+    if (!signal.separationOk || !signal.coldMarginOk) {
+      return {
+        ok: false,
+        reason: `Analyzer · barrier edge thin (${signal.watching.separation || "—"})`,
+      };
+    }
+  }
 
-  const sideLabel = signal.side === "DIGITMATCH" ? "Matches" : "Differs";
   return {
     ok: true,
-    label: `${sideLabel} ${signal.digit} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}%`,
+    label: `${sideLabel(signal.side)} ${signal.digit} · gap ${gap ?? "—"} · ${signal.digitPercent.toFixed(1)}%`,
   };
 }
 
@@ -127,12 +156,32 @@ export function liveTapeAllowsEntry(
         reason: `Analyzer · live gap ${gap}/${settings.minColdGap} · Warming (tape)`,
       };
     }
-  } else {
+  } else if (signal.side === "DIGITMATCH") {
     const gap = liveDigitGap(tape, signal.digit);
     if (gap > settings.maxMomentumGap) {
       return {
         ok: false,
         reason: `Analyzer · live momentum gap ${gap} > ${settings.maxMomentumGap}`,
+      };
+    }
+  } else {
+    // Over/Under — gap is ticks since last winning outcome vs barrier.
+    let ouGap = 0;
+    let found = false;
+    for (let i = tape.length - 1; i >= 0; i -= 1) {
+      const d = tape[i];
+      const won =
+        signal.side === "DIGITOVER" ? d > signal.digit : d < signal.digit;
+      if (won) {
+        found = true;
+        break;
+      }
+      ouGap += 1;
+    }
+    if (!found || ouGap > settings.maxMomentumGap) {
+      return {
+        ok: false,
+        reason: `Analyzer · live O/U gap ${found ? ouGap : "—"} > ${settings.maxMomentumGap}`,
       };
     }
   }

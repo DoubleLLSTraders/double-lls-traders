@@ -1,22 +1,34 @@
-import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
+import { flushSync } from "react-dom";
 import type { AppConfig } from "../lib/config";
 import type { Tick } from "../lib/deriv/types";
 import type { DerivClient } from "../lib/deriv/client";
 import { buyDigitContractsBulk, waitForBasketOutcome } from "../lib/deriv/trade";
 import type { MarketSignal } from "../lib/analysis/signal";
-import { isArmedSignal } from "../lib/analysis/signal";
+import { isOverUnderSide } from "../lib/analysis/contractSide";
+import {
+  contractWon,
+  isArmedSignal,
+  sideLabel,
+} from "../lib/analysis/signal";
 import type { BotSession, BotSettings, TradeJournalEntry } from "../lib/bot/types";
-import { isAnalyzerGood } from "../lib/analysis/analyzerGate";
-import { firmSteadyCheck } from "../lib/analysis/analyzerDirector";
-import { capStake, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
+import { resolveAnalyzerPace } from "../lib/analysis/analyzerDirector";
+import { capStake, MIN_STAKE, recoveryStake, stakeFromRisk } from "../lib/bot/gates";
 import { liveSettingsForBalance, resolveLiveStake } from "../lib/bot/liveProfile";
 import { appendTrade } from "../lib/bot/tradeStore";
 import { playLossSound, playWinSound } from "../lib/sound";
+import { isClientRole } from "../lib/appRole";
+import { hasOauthSession } from "../lib/deriv/oauth";
 import {
-  DIFF_PAYOUT_MULTIPLIER,
-  MATCH_PAYOUT_MULTIPLIER,
   computePerformance,
   isLowPayoutSymbol,
+  payoutMultiplier,
   profitRate,
   settleContractPnl,
   type PerformanceStats,
@@ -34,6 +46,11 @@ export interface PaperBotState {
   runsThisStart: number;
   /** Session P/L accrued since the current Start click. */
   pnlThisStart: number;
+  /**
+   * Wall-clock end for Custom / timed sessions (ms since epoch).
+   * 0 = no timer (Quick / TP mode).
+   */
+  sessionEndAtMs: number;
   /** Live buy sent but not yet recorded as open. */
   orderPending: boolean;
   /** Open contract still settling — Stop is blocked until this clears. */
@@ -95,7 +112,27 @@ export function usePaperBot(options: {
     buyNow: boolean;
     digit: number;
     side: MarketSignal["side"];
+    /** Epoch when Digits last armed Trade now — same-tick fire key. */
+    armedEpoch: number | null;
+    /** Live analyzer phase label (Locking / Confirming / Trade now…). */
+    label: string;
+    detail: string;
+    /** OU elite momentum gap when Digits arms Trade now. */
+    entryGap?: number | null;
   }>;
+  /** Increments when Digits arms Trade now — forces same-turn layout fire. */
+  tradeNowWake?: number;
+  /**
+   * App calls this the microsecond Digits arms Trade now — runs desk tick
+   * without waiting for another React frame.
+   */
+  executorFireRef?: MutableRefObject<(() => void) | null>;
+  /**
+   * Set true when the desk refuses an armed Trade now (skip-first, cool,
+   * wait-drop). App clears the Digits arm so UI does not stay on Trade now
+   * / In trade while nothing is bought.
+   */
+  executorArmCancelRef?: MutableRefObject<boolean>;
   onSettings: (next: Partial<BotSettings>) => void;
   onStop: (reason: string) => void;
   /**
@@ -128,6 +165,9 @@ export function usePaperBot(options: {
     analyzerDigit,
     analyzerSide,
     analyzerSnapRef,
+    tradeNowWake = 0,
+    executorFireRef,
+    executorArmCancelRef,
     onSettings,
     onStop,
     onSwitchMarket,
@@ -143,13 +183,17 @@ export function usePaperBot(options: {
   const [waitReason, setWaitReason] = useState<string | null>(null);
   const [runsThisStart, setRunsThisStart] = useState(0);
   const [pnlThisStart, setPnlThisStart] = useState(0);
+  const [sessionEndAtMs, setSessionEndAtMs] = useState(0);
   const [orderPending, setOrderPending] = useState(false);
   /** Real result from Deriv for the open live basket. null won = read failed. */
   const [liveOutcome, setLiveOutcome] = useState<{
+    /** Buy/order epoch used to match the open basket. */
     entryEpoch: number;
     won: boolean | null;
     profit: number | null;
     exitDigit: number | null;
+    exitEpoch?: number | null;
+    derivEntryEpoch?: number | null;
   } | null>(null);
 
   const settingsRef = useRef(settings);
@@ -163,6 +207,8 @@ export function usePaperBot(options: {
   const runOriginRef = useRef<{ trades: number; pnl: number }>({ trades: 0, pnl: 0 });
   const runsThisStartRef = useRef(0);
   const pnlThisStartRef = useRef(0);
+  /** Wall-clock end for timed hour sessions (0 = off). */
+  const sessionEndAtMsRef = useRef(0);
   /**
    * The caller passes these as inline arrows, so they get a new identity on
    * every render. Held in refs and kept out of the tick effect's dependencies,
@@ -194,14 +240,12 @@ export function usePaperBot(options: {
     analyzerDigitRef.current = analyzerDigit;
     analyzerSideRef.current = analyzerSide;
   }
-  /**
-   * After Start: skip the first Digits Trade now streak, buy on the next.
-   * Intentional sync — do not chase a signal that was already forming at Start.
-   */
-  const syncPhaseRef = useRef<"await-first" | "skip-first" | "live">("await-first");
   /** Wall-clock cool-down after a loss — no buys until this clears. */
   const coolUntilMsRef = useRef(0);
-  const LOSS_COOL_MS = 50_000;
+  /** Prevent double-fire (layout wake + tick) on the same entry epoch. */
+  const firedBuyEpochRef = useRef<number | null>(null);
+  /** Latest desk tick runner — App fires this on Trade now rising edge. */
+  const deskTickRef = useRef<() => void>(() => {});
 
   const entriesBlocked = () =>
     !runningRef.current ||
@@ -238,18 +282,22 @@ export function usePaperBot(options: {
     balance: number | null,
   ): BotSettings => {
     if (config.mode !== "live" || balance === null) return settings;
+    // Cap exposure only — never rewrite the Base stake from the form.
     const resolved = resolveLiveStake(settings, balance, isVirtualRef.current);
     return {
       ...settings,
-      stake: resolved.stake,
+      stake: Math.max(MIN_STAKE, settings.stake),
       maxExposurePercent: resolved.maxExposurePercent,
-      maxStake: Math.max(settings.maxStake, resolved.stake),
+      maxStake: Math.max(settings.maxStake, settings.stake),
     };
   };
 
-  useEffect(() => {
+  // Layout: halt / start session bookkeeping before the desk-tick buy layout.
+  useLayoutEffect(() => {
     if (!running) {
       if (haltRef) haltRef.current = true;
+      sessionEndAtMsRef.current = 0;
+      setSessionEndAtMs(0);
       if (sessionRef.current.open) {
         setWaitReason(
           sessionRef.current.open.mode === "live"
@@ -289,14 +337,26 @@ export function usePaperBot(options: {
     pnlThisStartRef.current = 0;
     stuckSkipsRef.current = 0;
     lastSwitchEpochRef.current = 0;
-    syncPhaseRef.current = "await-first";
+    firedBuyEpochRef.current = null;
     coolUntilMsRef.current = 0;
+    const hours = settings.sessionHours ?? 0;
+    const endAt =
+      hours > 0 ? Date.now() + Math.round(hours * 3_600_000) : 0;
+    sessionEndAtMsRef.current = endAt;
+    setSessionEndAtMs(endAt);
     setRunsThisStart(0);
     setPnlThisStart(0);
 
     const modeLabel = config.mode === "live" ? "LIVE demo buy" : "Paper";
     const limits = [
-      settings.takeProfit > 0 ? `TP +${settings.takeProfit}` : null,
+      hours > 0
+        ? `${hours}h timed · stake ${settings.stake.toFixed(2)}/trade · TP does not stop`
+        : null,
+      hours <= 0 && settings.takeProfit > 0
+        ? `TP +${settings.takeProfit}`
+        : hours > 0 && settings.takeProfit > 0
+          ? `TP +${settings.takeProfit} comfort only`
+          : null,
       settings.stopLoss > 0 ? `SL −${settings.stopLoss}` : null,
       settings.maxRuns > 0 ? `${settings.maxRuns} runs` : null,
     ]
@@ -305,12 +365,12 @@ export function usePaperBot(options: {
     setLog((lines) =>
       pushLog(
         lines,
-        `Started · ${modeLabel} · ${settings.side === "DIGITMATCH" ? "Matches" : "Differs"} · ${settings.contracts}× ${settings.stake.toFixed(2)} · sample≥${settings.minSample} · skip 1st Trade now${
-          limits ? ` · ${limits}` : ""
-        }`,
+        `Started · ${modeLabel} · ${sideLabel(settings.side)} · ${settings.contracts}× ${settings.stake.toFixed(2)} · sample≥${settings.minSample} · buy on Trade now${limits ? ` · ${limits}` : ""}`,
       ),
     );
-    setWaitReason("Follow · sync · will skip first Trade now…");
+    setWaitReason(
+      "Follow · live · wait analyzer Trade now…",
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running]);
 
@@ -341,7 +401,9 @@ export function usePaperBot(options: {
     balance,
   ]);
 
-  useEffect(() => {
+  // useLayoutEffect: fire buy before paint so Trade now and executor share one turn.
+  useLayoutEffect(() => {
+    const deskTick = () => {
     const latest = ticks[ticks.length - 1];
     const hasOpen = sessionRef.current.open !== null;
 
@@ -381,7 +443,8 @@ export function usePaperBot(options: {
         nextSettings,
         liveBalance,
         isVirtualRef.current,
-        { lockStake: runningRef.current },
+        // Form owns Base stake on demo and real — never auto-patch it.
+        { lockStake: true },
       );
       if (livePatch) {
         nextSettings = { ...nextSettings, ...livePatch };
@@ -390,7 +453,7 @@ export function usePaperBot(options: {
           setLog((lines) =>
             pushLog(
               lines,
-              `Live · balance ${liveBalance.toFixed(2)} → stake ${nextSettings.stake.toFixed(2)} · cap ${nextSettings.maxExposurePercent}%`,
+              `Live · balance ${liveBalance.toFixed(2)} · stake ${nextSettings.stake.toFixed(2)} kept · cap ${nextSettings.maxExposurePercent}%`,
             ),
           );
         }
@@ -399,19 +462,44 @@ export function usePaperBot(options: {
 
     if (nextSettings.autoFollow) {
       const patch: Partial<BotSettings> = {};
-      if (liveSignal.digit !== nextSettings.prediction) {
-        patch.prediction = liveSignal.digit;
-      }
-      if (liveSignal.side !== nextSettings.side) {
-        patch.side = liveSignal.side;
+      const snapFollow = analyzerSnapRef?.current;
+      // Over/Under: Digits director owns the barrier. Never yank prediction
+      // from a jumping live signal during Trade now / lock (that deceived buys).
+      const ouFromDigits =
+        snapFollow &&
+        (isOverUnderSide(snapFollow.side) ||
+          isOverUnderSide(nextSettings.side));
+      if (ouFromDigits && snapFollow) {
+        if (snapFollow.digit !== nextSettings.prediction) {
+          patch.prediction = snapFollow.digit;
+        }
+        if (
+          nextSettings.autoSide &&
+          snapFollow.side !== nextSettings.side
+        ) {
+          patch.side = snapFollow.side;
+        }
+      } else {
+        if (liveSignal.digit !== nextSettings.prediction) {
+          patch.prediction = liveSignal.digit;
+        }
+        if (
+          nextSettings.autoSide &&
+          liveSignal.side !== nextSettings.side
+        ) {
+          patch.side = liveSignal.side;
+        }
       }
       if (Object.keys(patch).length > 0) {
         nextSettings = { ...nextSettings, ...patch };
         onSettingsRef.current(patch);
+        const src = ouFromDigits && snapFollow ? snapFollow : liveSignal;
+        const srcSide = "side" in src ? src.side : liveSignal.side;
+        const srcDigit = "digit" in src ? src.digit : liveSignal.digit;
         setLog((lines) =>
           pushLog(
             lines,
-            `Feed → ${liveSignal.label} (${liveSignal.confidence} · power ${liveSignal.power} · ${isArmedSignal(liveSignal) ? "armed" : "watch"})`,
+            `Feed → ${sideLabel(srcSide)} ${srcDigit} (${liveSignal.confidence} · power ${liveSignal.power} · ${isArmedSignal(liveSignal) ? "armed" : "watch"})`,
           ),
         );
       }
@@ -420,52 +508,77 @@ export function usePaperBot(options: {
     if (nextSession.open) {
       if (!latest && nextSession.open.mode === "paper") return;
       setWaitReason(
-        `Open · ${nextSession.open.side === "DIGITMATCH" ? "Matches" : "Differs"} ${nextSession.open.digit} · settling…`,
+        `In trade · ${sideLabel(nextSession.open.side)} ${nextSession.open.digit} · waiting result…`,
       );
       const open = nextSession.open;
+
       const settledOnTicks = () => {
         if (!latest) return null;
-        const age = ticks.filter((tick) => tick.epoch > open.entryEpoch).length;
-        if (age < open.settleAfter) return null;
-        return open.side === "DIGITMATCH"
-          ? latest.digit === open.digit
-          : latest.digit !== open.digit;
+        // Duration-1: result is the tick immediately after Trade now / buy.
+        const need = Math.max(1, open.settleAfter || 1);
+        const after = ticks.filter((tick) => tick.epoch > open.entryEpoch);
+        if (after.length < need) return null;
+        const settleTick = after[need - 1] ?? latest;
+        return {
+          won: contractWon(open.side, open.digit, settleTick.digit),
+          settleEpoch: settleTick.epoch,
+          settleDigit: settleTick.digit,
+        };
       };
 
       let won: boolean;
       let realised: number | undefined;
-      // The tick the contract was judged on. Live trades take it from Deriv;
-      // the newest local tick is a different tick by the time the reply lands,
-      // which is why the ledger used to show losses on non-barrier digits.
       let settleDigit: number | null = null;
+      let settleEpoch: number | null = null;
 
       if (open.mode === "live") {
-        // Deriv is the only reliable source: the contract starts on the tick it
-        // picks when the order lands, not on the last tick this client saw.
-        if (!liveOutcome) return;
-        if (liveOutcome.entryEpoch !== open.entryEpoch) {
-          // Belongs to an older basket; drop it so the guard above re-arms.
-          setLiveOutcome(null);
-          return;
-        }
-        if (liveOutcome.won === null) {
+        const orderEpoch = open.orderEpoch ?? open.entryEpoch;
+        const outcome =
+          liveOutcome && liveOutcome.entryEpoch === orderEpoch
+            ? liveOutcome
+            : null;
+        const local = settledOnTicks();
+
+        if (outcome && outcome.won === null) {
           setWaitReason("Open · waiting for Deriv settlement…");
           return;
         }
-        won = liveOutcome.won;
-        realised = liveOutcome.profit ?? undefined;
-        settleDigit = liveOutcome.exitDigit;
-        setLiveOutcome(null);
+
+        if (outcome && outcome.won !== null) {
+          won = outcome.won;
+          realised = outcome.profit ?? undefined;
+          settleDigit = outcome.exitDigit;
+          // W/L on the next tick after E (Trade now tick) — never shift E forward.
+          const afterEntry = ticks.find((t) => t.epoch > open.entryEpoch);
+          settleEpoch =
+            local?.settleEpoch ??
+            afterEntry?.epoch ??
+            outcome.exitEpoch ??
+            latest?.epoch ??
+            open.entryEpoch;
+          setLiveOutcome(null);
+        } else if (local) {
+          won = local.won;
+          settleDigit = local.settleDigit;
+          settleEpoch = local.settleEpoch;
+        } else {
+          if (liveOutcome && liveOutcome.entryEpoch !== orderEpoch) {
+            setLiveOutcome(null);
+          }
+          return;
+        }
       } else {
         const guess = settledOnTicks();
         if (guess === null) return;
-        won = guess;
-        settleDigit = latest?.digit ?? null;
+        won = guess.won;
+        settleDigit = guess.settleDigit;
+        settleEpoch = guess.settleEpoch;
       }
 
       const exposure = open.stake * open.contracts;
       const payout =
-        realised ?? settleContractPnl(exposure, won, open.side, open.payout);
+        realised ??
+        settleContractPnl(exposure, won, open.side, open.payout, open.digit);
       const consecutiveLosses = won ? 0 : nextSession.consecutiveLosses + 1;
       let currentStake = stakeFromRisk(nextSettings, liveBalance, nextSettings.maxStake);
       let martingaleSteps = 0;
@@ -497,8 +610,10 @@ export function usePaperBot(options: {
           reset("step cap hit");
         } else if (!plan.enough) {
           reset(
-            `${nextSettings.side === "DIGITMATCH" ? "Matches" : "Differs"} needs ${(
-              plan.exposure > 0 ? deficit / profitRate(nextSettings.side) : 0
+            `${sideLabel(nextSettings.side)} needs ${(
+              plan.exposure > 0
+                ? deficit / profitRate(nextSettings.side, open.digit)
+                : 0
             ).toFixed(2)} exposure · over max stake`,
           );
         } else if (plan.exposure > budget) {
@@ -524,7 +639,7 @@ export function usePaperBot(options: {
 
       const entry: TradeJournalEntry = {
         id: `${open.entryEpoch}-${nextSession.trades + 1}`,
-        at: latest?.epoch ?? open.entryEpoch,
+        at: settleEpoch ?? latest?.epoch ?? open.entryEpoch,
         side: open.side,
         digit: open.digit,
         stake: open.stake,
@@ -592,20 +707,36 @@ export function usePaperBot(options: {
         ),
       );
 
-      // Loss → cool the tape, hop market, then continue only if runs remain.
+      // Loss → short cool, then the session limits below still apply. This
+      // must NOT return early: run count, stop loss and the daily caps are
+      // checked further down, and a loss is exactly when they matter.
       if (!won) {
-        coolUntilMsRef.current = Date.now() + LOSS_COOL_MS;
+        const pace = resolveAnalyzerPace(nextSettings.analyzerPace);
+        const ouDesk =
+          nextSettings.analyzerPace === "overunder-firm" ||
+          nextSettings.side === "DIGITOVER" ||
+          nextSettings.side === "DIGITUNDER";
+        // O/U Shield: ~1s cool so many runs stay in the clock; other desks keep pace.
+        const lossCoolMs = ouDesk
+          ? Math.min(pace.lossCoolMs, 1_200)
+          : pace.lossCoolMs;
+        coolUntilMsRef.current = Date.now() + lossCoolMs;
         setWaitReason(
-          `Cooling ${Math.round(LOSS_COOL_MS / 1000)}s after loss · wait settle…`,
+          `Follow · cool ${Math.round(lossCoolMs / 1000)}s · then wait analyzer…`,
         );
         setLog((lines) =>
           pushLog(
             lines,
-            `COOL · loss · pause ${Math.round(LOSS_COOL_MS / 1000)}s · then hunt steady`,
+            `COOL · loss · pause ${Math.round(lossCoolMs / 1000)}s · follow analyzer`,
           ),
         );
-        onSwitchMarketRef.current?.("Cooling · loss · next volatility");
+        // Timed Custom / hour clock owns the stop — do not abort early on a
+        // loss streak (3 thin Over 0 / Under 9 losses was killing 7m runs).
+        const timedSession =
+          sessionEndAtMsRef.current > 0 ||
+          (nextSettings.sessionHours ?? 0) > 0;
         if (
+          !timedSession &&
           nextSettings.maxConsecutiveLosses > 0 &&
           consecutiveLosses >= nextSettings.maxConsecutiveLosses
         ) {
@@ -618,13 +749,52 @@ export function usePaperBot(options: {
               `STOPPED · ${consecutiveLosses} consecutive losses · session closed`,
             ),
           );
+          return;
         }
+        if (timedSession && consecutiveLosses >= 3) {
+          // O/U: brief extra cool only — never park 8s (that felt like "cool 7s").
+          coolUntilMsRef.current = Math.max(
+            coolUntilMsRef.current,
+            Date.now() + (ouDesk ? 2_000 : Math.max(lossCoolMs, 8_000)),
+          );
+          setLog((lines) =>
+            pushLog(
+              lines,
+              `COOL · ${consecutiveLosses} losses · timed session keeps clock`,
+            ),
+          );
+        }
+      } else {
+        coolUntilMsRef.current = 0;
+      }
+
+      // Bot form owns the flow: timed session → runs → take profit / stop loss.
+      if (
+        sessionEndAtMsRef.current > 0 &&
+        Date.now() >= sessionEndAtMsRef.current
+      ) {
+        const hrs = nextSettings.sessionHours ?? 0;
+        onStopRef.current(
+          `Stopped · ${hrs || "timed"}h session complete.`,
+        );
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `STOPPED · session clock · ${runsDone} trades · P/L ${
+              runPnl >= 0 ? "+" : ""
+            }${runPnl.toFixed(2)} ${currency}`,
+          ),
+        );
         return;
       }
-      coolUntilMsRef.current = 0;
-
-      // Bot form owns the flow: Number of runs → Take profit / Stop loss.
-      if (nextSettings.maxRuns > 0 && runsDone >= nextSettings.maxRuns) {
+      const timedOpen =
+        sessionEndAtMsRef.current > 0 || (nextSettings.sessionHours ?? 0) > 0;
+      // Timed Custom / hour cards: clock owns the stop — ignore maxRuns + TP.
+      if (
+        !timedOpen &&
+        nextSettings.maxRuns > 0 &&
+        runsDone >= nextSettings.maxRuns
+      ) {
         onStopRef.current(
           `Stopped · ${runsDone}/${nextSettings.maxRuns} runs complete.`,
         );
@@ -638,7 +808,12 @@ export function usePaperBot(options: {
         );
         return;
       }
-      if (nextSettings.takeProfit > 0 && runPnl >= nextSettings.takeProfit) {
+      // Timed hour sessions ignore TP — keep staking until the clock ends.
+      if (
+        !timedOpen &&
+        nextSettings.takeProfit > 0 &&
+        runPnl >= nextSettings.takeProfit
+      ) {
         onStopRef.current("Take profit hit.");
         setLog((lines) =>
           pushLog(
@@ -647,6 +822,18 @@ export function usePaperBot(options: {
           ),
         );
         return;
+      }
+      if (
+        timedOpen &&
+        nextSettings.takeProfit > 0 &&
+        runPnl >= nextSettings.takeProfit
+      ) {
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `TP passed +${runPnl.toFixed(2)} · timed session keeps trading until clock ends`,
+          ),
+        );
       }
       if (nextSettings.stopLoss > 0 && runPnl <= -nextSettings.stopLoss) {
         onStopRef.current("Stop loss hit.");
@@ -664,7 +851,9 @@ export function usePaperBot(options: {
         return;
       }
       if (
+        !timedOpen &&
         nextSettings.takeProfit <= 0 &&
+        nextSettings.dailyProfitTarget > 0 &&
         pnl >= nextSettings.dailyProfitTarget
       ) {
         onStopRef.current("Profit target.");
@@ -682,7 +871,21 @@ export function usePaperBot(options: {
         nextSettings.maxRuns > 0
           ? `${runsDone}/${nextSettings.maxRuns}`
           : `${runsDone}`;
-      setWaitReason(`Run ${runsLeft} won · hunting next Good…`);
+      const clockLeft =
+        timedOpen && sessionEndAtMsRef.current > 0
+          ? Math.max(
+              0,
+              Math.ceil((sessionEndAtMsRef.current - Date.now()) / 60_000),
+            )
+          : null;
+      // A live loss cool-down already set the reason — leave it visible.
+      if (won || Date.now() >= coolUntilMsRef.current) {
+        setWaitReason(
+          clockLeft !== null
+            ? `Follow · timed ${clockLeft}m left · ${runsLeft} trades · wait analyzer…`
+            : `Follow · ${runsLeft} done · wait analyzer Trade now…`,
+        );
+      }
       setLog((lines) =>
         pushLog(
           lines,
@@ -695,7 +898,16 @@ export function usePaperBot(options: {
 
     if (!nextSession.open) {
       if (switchHoldRef?.current) {
-        setWaitReason("Analyzing markets before next trade…");
+        // Feed is swapping — executor stays idle and only follows analyzer.
+        const snap = analyzerSnapRef?.current;
+        const phase = snap?.label ?? "Watch";
+        const dig = snap?.digit ?? analyzerDigitRef.current;
+        const side = snap?.side ?? analyzerSideRef.current;
+        setWaitReason(
+          dig != null && side
+            ? `Follow · ${phase} · ${sideLabel(side)} ${dig} · wait analyzer`
+            : "Follow · wait analyzer · market feed catching up…",
+        );
         return;
       }
       if (entriesBlocked()) return;
@@ -713,13 +925,55 @@ export function usePaperBot(options: {
       }
       if (Date.now() < coolUntilMsRef.current) {
         const sec = Math.ceil((coolUntilMsRef.current - Date.now()) / 1000);
-        setWaitReason(`Cooling · ${sec}s · tape settling after loss…`);
+        const armedNow =
+          analyzerSnapRef?.current?.buyNow === true ||
+          analyzerBuyNowRef.current === true;
+        if (armedNow && executorArmCancelRef) {
+          executorArmCancelRef.current = true;
+        }
+        setWaitReason(`Follow · cool ${sec}s · then wait analyzer…`);
         return;
       }
 
       const runsDone = nextSession.trades - runOriginRef.current.trades;
       const runPnl = nextSession.pnl - runOriginRef.current.pnl;
-      if (nextSettings.maxRuns > 0 && runsDone >= nextSettings.maxRuns) {
+      if (
+        sessionEndAtMsRef.current > 0 &&
+        Date.now() >= sessionEndAtMsRef.current
+      ) {
+        const hrs = nextSettings.sessionHours ?? 0;
+        onStopRef.current(
+          `Stopped · ${hrs || "timed"}h session complete.`,
+        );
+        setLog((lines) =>
+          pushLog(
+            lines,
+            `STOPPED · session clock · ${runsDone} trades · P/L ${
+              runPnl >= 0 ? "+" : ""
+            }${runPnl.toFixed(2)} ${currency}`,
+          ),
+        );
+        return;
+      }
+      const timedOpen =
+        sessionEndAtMsRef.current > 0 || (nextSettings.sessionHours ?? 0) > 0;
+      // Heal clock if Start profile wiped the end time but form still has hours.
+      if (
+        timedOpen &&
+        sessionEndAtMsRef.current <= 0 &&
+        (nextSettings.sessionHours ?? 0) > 0
+      ) {
+        const healed =
+          Date.now() +
+          Math.round((nextSettings.sessionHours ?? 0) * 3_600_000);
+        sessionEndAtMsRef.current = healed;
+        setSessionEndAtMs(healed);
+      }
+      if (
+        !timedOpen &&
+        nextSettings.maxRuns > 0 &&
+        runsDone >= nextSettings.maxRuns
+      ) {
         onStopRef.current("Run count reached.");
         setLog((lines) =>
           pushLog(
@@ -729,7 +983,11 @@ export function usePaperBot(options: {
         );
         return;
       }
-      if (nextSettings.takeProfit > 0 && runPnl >= nextSettings.takeProfit) {
+      if (
+        !timedOpen &&
+        nextSettings.takeProfit > 0 &&
+        runPnl >= nextSettings.takeProfit
+      ) {
         onStopRef.current("Take profit hit.");
         setLog((lines) =>
           pushLog(
@@ -747,74 +1005,41 @@ export function usePaperBot(options: {
       const hourCount = tradesLastHour(nextSession.openEpochs, latest.epoch);
       const runsDoneNow = nextSession.trades - runOriginRef.current.trades;
 
-      // Pure follower: Digits Trade now owns digit/side — no desk research.
-      const followDigit = analyzerDigitRef.current ?? liveSignal.digit;
-      const followSide = analyzerSideRef.current ?? liveSignal.side;
-      const buyNow = analyzerBuyNowRef.current === true;
-      const sideLabel =
-        followSide === "DIGITMATCH" ? "Matches" : "Differs";
-
-      // Start sync: skip first Trade now streak; buy the next one (intentional).
-      if (syncPhaseRef.current === "await-first") {
-        if (buyNow) {
-          syncPhaseRef.current = "skip-first";
-          setWaitReason(
-            `Follow · sync · skip 1st Trade now · ${sideLabel} ${followDigit}`,
-          );
-          setLog((lines) =>
-            pushLog(
-              lines,
-              `SYNC · skip first Trade now · ${sideLabel} ${followDigit} · wait next`,
-            ),
-          );
-          return;
-        }
-        setWaitReason(
-          `Follow · sync · waiting first Trade now · ${sideLabel} ${followDigit}`,
-        );
-        return;
-      }
-      if (syncPhaseRef.current === "skip-first") {
-        if (!buyNow) {
-          syncPhaseRef.current = "live";
-          setWaitReason(
-            `Follow · synced · waiting next Trade now · ${sideLabel} ${followDigit}`,
-          );
-          setLog((lines) =>
-            pushLog(lines, "SYNC · first Trade now cleared · next one buys"),
-          );
-          return;
-        }
-        setWaitReason(
-          `Follow · sync · skip 1st Trade now · ${sideLabel} ${followDigit}`,
-        );
-        return;
-      }
+      // Pure follower: analyzer owns digit/side/phase — executor only buys
+      // when Trade now is armed. No hunting, no re-gate, no second guess.
+      const snap = analyzerSnapRef?.current;
+      const followDigit = snap?.digit ?? analyzerDigitRef.current ?? liveSignal.digit;
+      const followSide = snap?.side ?? analyzerSideRef.current ?? liveSignal.side;
+      const buyNow =
+        snap?.buyNow === true || analyzerBuyNowRef.current === true;
+      const followLabel = sideLabel(followSide);
+      const phaseLabel = snap?.label ?? (buyNow ? "Trade now" : "Watch");
 
       if (!buyNow) {
         nextSession = { ...nextSession, skipped: nextSession.skipped + 1 };
         setSession(nextSession);
         setWaitReason(
-          `Follow · waiting Digits Trade now · ${sideLabel} ${followDigit}`,
+          `Follow · ${phaseLabel} · ${followLabel} ${followDigit} · wait Trade now`,
         );
-        if (!isAnalyzerGood(liveSignal, nextSettings)) {
-          stuckSkipsRef.current += 1;
-          if (stuckSkipsRef.current >= 8 && onSwitchMarketRef.current) {
-            stuckSkipsRef.current = 0;
-            setWaitReason("Analyzer · tape dead · next market…");
-            setLog((lines) =>
-              pushLog(lines, "ROTATE · analyzer hunting better market"),
-            );
-            onSwitchMarketRef.current("Hunting · next volatility");
-          }
-        } else {
-          stuckSkipsRef.current = 0;
-        }
         return;
       }
 
-      // Run / money stops only — never re-back waits or deep research.
-      if (nextSettings.maxRuns > 0 && runsDoneNow >= nextSettings.maxRuns) {
+      // Run / money / clock stops only — never re-research the analyzer call.
+      if (
+        sessionEndAtMsRef.current > 0 &&
+        Date.now() >= sessionEndAtMsRef.current
+      ) {
+        const hrs = nextSettings.sessionHours ?? 0;
+        onStopRef.current(
+          `Stopped · ${hrs || "timed"}h session complete.`,
+        );
+        return;
+      }
+      if (
+        !timedOpen &&
+        nextSettings.maxRuns > 0 &&
+        runsDoneNow >= nextSettings.maxRuns
+      ) {
         onStopRef.current(
           `Stopped · ${runsDoneNow}/${nextSettings.maxRuns} runs complete.`,
         );
@@ -824,50 +1049,43 @@ export function usePaperBot(options: {
         nextSettings.maxTradesPerHour > 0 &&
         hourCount >= nextSettings.maxTradesPerHour
       ) {
-        setWaitReason(`Skip · max ${nextSettings.maxTradesPerHour} trades/hour`);
+        setWaitReason(`Follow · max ${nextSettings.maxTradesPerHour} trades/hour`);
         return;
       }
       if (isLowPayoutSymbol(symbol)) {
         onSwitchMarketRef.current?.("Low payout · next volatility");
         return;
       }
-      // INSTANT FIRE — Digits confirmed; still must be firm on this tick.
-      if (analyzerBuyNowRef.current !== true) {
+      // INSTANT FIRE — analyzer Trade now; trust snap digit/side, no re-gate.
+      if (
+        snap?.buyNow !== true &&
+        analyzerBuyNowRef.current !== true
+      ) {
         setWaitReason("Follow · Trade now dropped · no buy");
         return;
       }
-      // Barrier just printed on this tick — contract would be dead on arrival.
+      if (firedBuyEpochRef.current === latest.epoch) {
+        return;
+      }
+      // Barrier just printed on this tick — Differs contract would be dead.
       if (followSide === "DIGITDIFF" && latest.digit === followDigit) {
         setWaitReason(`Follow · Digits reset · ${followDigit} printed`);
         return;
       }
-      const stillFirm = firmSteadyCheck(liveSignal, nextSettings);
-      if (!stillFirm.ok) {
-        setWaitReason(
-          `Follow · not steady · ${stillFirm.reason.replace(/^Analyzer ·/, "")}`,
-        );
-        setLog((lines) =>
-          pushLog(lines, `SKIP · unsteady at wire · ${stillFirm.reason}`),
-        );
-        return;
-      }
-      if (
-        liveSignal.digit !== followDigit ||
-        liveSignal.side !== followSide
-      ) {
-        setWaitReason(
-          `Follow · Digits moved · ${sideLabel} ${followDigit} → ${liveSignal.digit}`,
-        );
-        return;
-      }
 
       stuckSkipsRef.current = 0;
+      firedBuyEpochRef.current = latest.epoch;
 
-      setWaitReason(
-        `Opening NOW · firm ${sideLabel} ${followDigit}`,
+      setWaitReason(`Buying · ${followLabel} ${followDigit} · now`);
+      setLog((lines) =>
+        pushLog(
+          lines,
+          `FIRE · follow analyzer · ${followLabel} ${followDigit} · epoch ${latest.epoch}`,
+        ),
       );
 
       if (entriesBlocked()) {
+        firedBuyEpochRef.current = null;
         setWaitReason("Stopped · no new entries");
         return;
       }
@@ -881,15 +1099,29 @@ export function usePaperBot(options: {
         sized,
         liveBalance,
       );
-      const mode = config.mode === "live" ? "live" : "paper";
+      // Client OAuth → always buy on the user's Deriv wallet (demo or live).
+      const mode =
+        config.mode === "live" ||
+        (isClientRole() && hasOauthSession())
+          ? "live"
+          : "paper";
       // Exact Digits lock — realtime follow, no second guess.
       const side = followSide;
       const digit = followDigit;
       const contracts = nextSettings.contracts;
       const duration = nextSettings.duration;
-      const entryEpoch = latest.epoch;
+      // Pin E to the Trade now tick (armedEpoch), not a later tick if the
+      // desk fired a moment after the tape already advanced.
+      const entryEpoch =
+        typeof snap?.armedEpoch === "number" && snap.armedEpoch > 0
+          ? snap.armedEpoch
+          : latest.epoch;
       const entrySpot = latest.quote;
-      const entryGap = liveSignal.watching.signalGap;
+      // Shield OU: use director momentum gap (0–1 elite). Differs still uses signalGap.
+      const entryGap =
+        isOverUnderSide(followSide) && typeof snap?.entryGap === "number"
+          ? snap.entryGap
+          : liveSignal.watching.signalGap;
       const entryPercent = liveSignal.digitPercent;
       const entryPower = liveSignal.power;
 
@@ -903,42 +1135,48 @@ export function usePaperBot(options: {
         const upside =
           payout !== undefined
             ? payout - risked
-            : risked *
-              ((side === "DIGITMATCH" ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER) - 1);
-        setSession((prev) => {
-          if (prev.open) return prev;
-          const open = {
-            side,
-            digit,
-            stake,
-            contracts: filledCount,
-            entryEpoch,
-            settleAfter: duration,
-            mode: mode as "paper" | "live",
-            contractId,
-            contractIds,
-            payout,
-            note: tradeNoteRef.current || undefined,
-            entrySpot,
-            entryGap,
-            entryPercent,
-            entryPower,
-          };
-          const updated: BotSession = {
-            ...prev,
-            open,
-            openEpochs: [...prev.openEpochs, entryEpoch].slice(-200),
-            lastEntryDigit: digit,
-            lastEntryEpoch: entryEpoch,
-            currentStake: stake,
-          };
-          sessionRef.current = updated;
-          return updated;
+            : risked * (payoutMultiplier(side, undefined, digit) - 1);
+        // Paint open pin on the chart in the same turn as Trade now.
+        flushSync(() => {
+          setSession((prev) => {
+            if (prev.open) return prev;
+            const open = {
+              side,
+              digit,
+              stake,
+              contracts: filledCount,
+              // Same tick as Trade now — never defer entry to the next market.
+              entryEpoch,
+              settleAfter: Math.max(1, duration),
+              mode: mode as "paper" | "live",
+              orderEpoch: entryEpoch,
+              contractId,
+              contractIds,
+              payout,
+              note: tradeNoteRef.current || undefined,
+              entrySpot,
+              entryGap,
+              entryPercent,
+              entryPower,
+            };
+            const updated: BotSession = {
+              ...prev,
+              open,
+              openEpochs: [...prev.openEpochs, entryEpoch].slice(-200),
+              lastEntryDigit: digit,
+              lastEntryEpoch: entryEpoch,
+              currentStake: stake,
+            };
+            sessionRef.current = updated;
+            return updated;
+          });
+          setOrderPending(mode === "live");
+          setWaitReason(`In trade · ${followLabel} ${digit} · bought`);
         });
         setLog((lines) =>
           pushLog(
             lines,
-            `OPEN ${mode === "live" ? "LIVE " : ""}${side === "DIGITMATCH" ? "Matches" : "Differs"} ${digit} · ${filledCount}× ${stake} ${currency} · risk ${risked.toFixed(
+            `OPEN ${mode === "live" ? "LIVE " : ""}${sideLabel(side)} ${digit} · ${filledCount}× ${stake} ${currency} · risk ${risked.toFixed(
               2,
             )} / win +${upside.toFixed(2)}${
               filledCount > 1
@@ -954,12 +1192,17 @@ export function usePaperBot(options: {
       if (mode === "live") {
         const liveClient = clientRef.current;
         if (!liveClient || liveClient.getState() !== "ready") {
+          firedBuyEpochRef.current = null;
           setLog((lines) => pushLog(lines, "Skip · live buy needs ready Deriv socket"));
           return;
         }
-        if (entriesBlocked()) return;
+        if (entriesBlocked()) {
+          firedBuyEpochRef.current = null;
+          return;
+        }
+        // Mark busy + optimistic open NOW so Digits leaves Trade now instantly.
         orderInFlight.current = true;
-        setOrderPending(true);
+        applyOpen();
         const order = {
           symbol,
           side,
@@ -1018,12 +1261,39 @@ export function usePaperBot(options: {
           .then(({ contractId, contractIds, filledCount, payout }) => {
             orderInFlight.current = false;
             setOrderPending(false);
-            applyOpen(contractId, filledCount, payout, contractIds);
+            setSession((prev) => {
+              if (!prev.open || prev.open.entryEpoch !== entryEpoch) return prev;
+              const updated = {
+                ...prev,
+                open: {
+                  ...prev.open,
+                  contractId,
+                  contractIds,
+                  contracts: filledCount,
+                  payout,
+                },
+              };
+              sessionRef.current = updated;
+              return updated;
+            });
+            setLog((lines) =>
+              pushLog(
+                lines,
+                `FILLED · live ${sideLabel(side)} ${digit} · #${contractId}`,
+              ),
+            );
 
             const settleOpen = (liveClient: DerivClient, ids: number[]) => {
               void waitForBasketOutcome(liveClient, ids)
-                .then(({ won, profit, exitDigit }) =>
-                  setLiveOutcome({ entryEpoch, won, profit, exitDigit }),
+                .then(({ won, profit, exitDigit, exitEpoch, entryEpoch: derivEntry }) =>
+                  setLiveOutcome({
+                    entryEpoch,
+                    won,
+                    profit,
+                    exitDigit,
+                    exitEpoch,
+                    derivEntryEpoch: derivEntry,
+                  }),
                 )
                 .catch((error: unknown) => {
                   const why = error instanceof Error ? error.message : String(error);
@@ -1031,8 +1301,15 @@ export function usePaperBot(options: {
                     pushLog(lines, `Settle read failed (${why}) · retrying from Deriv…`),
                   );
                   void waitForBasketOutcome(liveClient, ids)
-                    .then(({ won, profit, exitDigit }) =>
-                      setLiveOutcome({ entryEpoch, won, profit, exitDigit }),
+                    .then(({ won, profit, exitDigit, exitEpoch, entryEpoch: derivEntry }) =>
+                      setLiveOutcome({
+                        entryEpoch,
+                        won,
+                        profit,
+                        exitDigit,
+                        exitEpoch,
+                        derivEntryEpoch: derivEntry,
+                      }),
                     )
                     .catch((retryError: unknown) => {
                       const retryWhy =
@@ -1054,6 +1331,15 @@ export function usePaperBot(options: {
           .catch((error: unknown) => {
             orderInFlight.current = false;
             setOrderPending(false);
+            firedBuyEpochRef.current = null;
+            setSession((prev) => {
+              if (prev.open?.entryEpoch === entryEpoch && prev.open.contractId == null) {
+                const updated = { ...prev, open: null };
+                sessionRef.current = updated;
+                return updated;
+              }
+              return prev;
+            });
             const message = error instanceof Error ? error.message : String(error);
             setLog((lines) => pushLog(lines, `BUY FAIL · ${message}`));
             setWaitReason(`Buy rejected · ${message}`);
@@ -1061,10 +1347,18 @@ export function usePaperBot(options: {
         return;
       }
 
-      if (entriesBlocked()) return;
+      if (entriesBlocked()) {
+        firedBuyEpochRef.current = null;
+        return;
+      }
 
       applyOpen();
     }
+    };
+
+    deskTickRef.current = deskTick;
+    if (executorFireRef) executorFireRef.current = deskTick;
+    deskTick();
     // analyzerBuyNow must be a dep: Digits Trade now often arms on the same
     // tick after the first effect pass — without it the desk stays on "waiting".
     // onSettings/onStop are intentionally absent: they are read through refs.
@@ -1079,12 +1373,20 @@ export function usePaperBot(options: {
     analyzerBuyNow,
     analyzerDigit,
     analyzerSide,
+    tradeNowWake,
   ]);
+
+  if (executorFireRef) {
+    executorFireRef.current = () => deskTickRef.current();
+  }
 
   const performance = computePerformance({
     ...session,
-    payoutMultiplier:
-      settings.side === "DIGITMATCH" ? MATCH_PAYOUT_MULTIPLIER : DIFF_PAYOUT_MULTIPLIER,
+    payoutMultiplier: payoutMultiplier(
+      settings.side,
+      undefined,
+      settings.prediction,
+    ),
   });
 
   return {
@@ -1094,6 +1396,7 @@ export function usePaperBot(options: {
     waitReason,
     runsThisStart,
     pnlThisStart,
+    sessionEndAtMs,
     orderPending,
     settling: session.open !== null || orderPending,
   };

@@ -1,11 +1,14 @@
+import { DeskSwitch } from "./DeskSwitch";
 import { ModeChooser } from "./ModeChooser";
+import { OverUnderChooser } from "./OverUnderChooser";
 import { CleanNumberInput } from "./CleanNumberInput";
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { AppConfig } from "../lib/config";
 import type { BotSession, BotSettings } from "../lib/bot/types";
 import {
   diffExpectedValue,
   effectiveDiffMultiple,
+  overUnderPayoutMultiplier,
   profitRate,
   type PerformanceStats,
 } from "../lib/bot/performance";
@@ -17,12 +20,33 @@ import {
   recoveryStake,
   stakeFromRisk,
 } from "../lib/bot/gates";
+import {
+  ANALYZER_PACES,
+  MATCHES_ANALYZER_PACES,
+  OVER_UNDER_ANALYZER_PACES,
+  type AnalyzerPaceId,
+} from "../lib/analysis/analyzerPace";
+import { deskOf, sideLabel, sideShort } from "../lib/analysis/contractSide";
+import type { TradeDesk } from "../lib/analysis/contractSide";
 import type { ContractSide } from "../lib/analysis/signal";
 import {
   liveWinPnl,
+  payoutCtxFromSettings,
   profitLimitsForStake,
   resolveLiveStake,
+  runsForTakeProfit,
 } from "../lib/bot/liveProfile";
+import {
+  formatSessionDuration,
+  OU_BULK_SESSION_PRESETS,
+  OU_OVER_BARRIERS,
+  OU_UNDER_BARRIERS,
+  ouBulkPresetForRuns,
+  sessionHoursFromParts,
+  sessionPartsFromHours,
+  type OuBulkSessionId,
+} from "../lib/bot/overUnderProfile";
+import { fairWinProb } from "../lib/analysis/overUnder";
 
 export type { BotSettings, ContractSide };
 
@@ -48,6 +72,8 @@ interface BotPanelProps {
   operatorControlled?: boolean;
   isVirtual?: boolean;
   differsFastActive?: boolean;
+  matchesFirmActive?: boolean;
+  overUnderActive?: boolean;
   liveProfileActive?: boolean;
   tradingMode?: AppConfig["mode"];
   onApplyLiveSettings?: () => void;
@@ -55,7 +81,10 @@ interface BotPanelProps {
   settling?: boolean;
   onChange: (next: BotSettings) => void;
   onSelectSide: (side: ContractSide) => void;
+  onSelectDesk?: (desk: TradeDesk) => void;
   onRestoreDiffersFast?: () => void;
+  onRestoreMatchesFirm?: () => void;
+  onRestoreOverUnder?: () => void;
   onToggle: () => void;
 }
 
@@ -79,41 +108,237 @@ function withStakeLinkedLimits(
   tradingMode: AppConfig["mode"],
   isVirtual: boolean,
 ): BotSettings {
+  const bulkId = ouBulkPresetForRuns(
+    settings.maxRuns,
+    settings.maxRunsManual,
+    settings.sessionHours,
+  );
+  // Hour bulk: stake change must rebuild TP/SL for the new stake (keep the hour cap).
+  if (
+    deskOf(settings.side) === "overunder" &&
+    bulkId !== "quick" &&
+    settings.maxRunsManual === true
+  ) {
+    return applyOuBulkSession(
+      { ...settings, stake, maxStake: Math.max(settings.maxStake, stake) },
+      bulkId,
+      isVirtual,
+    );
+  }
+
+  const committed = Math.max(MIN_STAKE, Number(stake.toFixed(2)));
   const next = {
     ...settings,
-    stake,
-    maxStake: Math.max(settings.maxStake, stake),
-    takeProfitManual: false,
+    stake: committed,
+    maxStake: Math.max(settings.maxStake, committed),
+    // Timed OU keeps manual TP marker; quick/auto TP resyncs from this stake.
+    takeProfitManual:
+      deskOf(settings.side) === "overunder" &&
+      (settings.sessionHours ?? 0) > 0
+        ? true
+        : settings.takeProfitManual === true,
   };
+  const ctx = payoutCtxFromSettings(next);
+  const preserveRuns =
+    next.maxRunsManual === true
+      ? { preserveMaxRuns: next.maxRuns }
+      : undefined;
 
   if (tradingMode === "live" && balance !== null) {
+    // Cap / exposure only — never raise the stake the user typed (e.g. 0.35 → 1.75).
     const resolved = resolveLiveStake(next, balance, isVirtual);
     const limits = profitLimitsForStake(
-      resolved.stake,
+      committed,
       next.contracts,
       isVirtual,
+      next.takeProfitManual === true ? next.takeProfit : undefined,
+      ctx,
+      preserveRuns,
     );
     return {
       ...next,
-      stake: resolved.stake,
-      maxExposurePercent: resolved.maxExposurePercent,
-      maxStake: Math.max(next.maxStake, resolved.stake),
+      stake: committed,
+      maxExposurePercent: Math.max(
+        resolved.maxExposurePercent,
+        next.maxExposurePercent,
+      ),
+      maxStake: Math.max(next.maxStake, committed),
       ...limits,
+      takeProfit:
+        next.takeProfitManual === true ? next.takeProfit : limits.takeProfit,
       dailyLossLimit: Math.max(next.dailyLossLimit, limits.dailyLossLimit),
     };
   }
 
   const limits = profitLimitsForStake(
-    stake,
+    committed,
     next.contracts,
     isVirtual,
-    next.takeProfitManual ? next.takeProfit : undefined,
+    next.takeProfitManual === true ? next.takeProfit : undefined,
+    ctx,
+    preserveRuns,
   );
   return {
     ...next,
     ...limits,
+    takeProfit:
+      next.takeProfitManual === true ? next.takeProfit : limits.takeProfit,
     dailyLossLimit: Math.max(next.dailyLossLimit, limits.dailyLossLimit),
   };
+}
+
+function applyOuBulkSession(
+  settings: BotSettings,
+  presetId: OuBulkSessionId,
+  isVirtual: boolean,
+  customDurationHours?: number,
+): BotSettings {
+  const preset =
+    OU_BULK_SESSION_PRESETS.find((p) => p.id === presetId) ??
+    OU_BULK_SESSION_PRESETS[0];
+  const ctx = payoutCtxFromSettings(settings);
+
+  if (preset.id === "quick") {
+    const limits = profitLimitsForStake(
+      settings.stake,
+      settings.contracts,
+      isVirtual,
+      undefined,
+      ctx,
+    );
+    return {
+      ...settings,
+      ...limits,
+      sessionHours: 0,
+      takeProfitManual: false,
+      maxRunsManual: false,
+      dailyLossLimit: Math.max(settings.dailyLossLimit, limits.dailyLossLimit),
+    };
+  }
+
+  // Full timed Start: stake every entry until the wall clock ends.
+  // TP may stay as a comfort marker — executor ignores TP stops while timed.
+  let durationHours =
+    preset.id === "custom"
+      ? (customDurationHours ??
+        (settings.sessionHours &&
+        settings.sessionHours > 0 &&
+        Math.abs(settings.sessionHours - 1) > 1e-9 &&
+        Math.abs(settings.sessionHours - 4) > 1e-9 &&
+        Math.abs(settings.sessionHours - 8) > 1e-9
+          ? settings.sessionHours
+          : 0.5))
+      : preset.hours;
+  // Minimum 1 minute.
+  durationHours = Math.max(1 / 60, durationHours);
+
+  const softSl = Number((settings.stake * 4).toFixed(2));
+  const hourCap = Math.max(settings.maxTradesPerHour || 36, 36);
+  const dayPad = Math.max(24, Math.ceil(durationHours * hourCap) + 24);
+
+  return {
+    ...settings,
+    sessionHours: durationHours,
+    maxRuns: 0,
+    maxRunsManual: true,
+    takeProfitManual: true,
+    dailyProfitTarget: 0,
+    stopLoss: softSl,
+    dailyLossLimit: Math.max(settings.dailyLossLimit, softSl * 2, 5),
+    maxTradesPerDay: Math.max(settings.maxTradesPerDay, dayPad),
+    maxTradesPerHour: hourCap,
+  };
+}
+
+function OuProfitMath({
+  settings,
+  currency,
+  runsThisStart,
+}: {
+  settings: BotSettings;
+  currency: string;
+  runsThisStart: number;
+}) {
+  const side =
+    settings.side === "DIGITUNDER" ? "DIGITUNDER" : "DIGITOVER";
+  const barrier = settings.prediction;
+  const payout = overUnderPayoutMultiplier(side, barrier);
+  const fair = fairWinProb(side, barrier) * 100;
+  const margin = payout - 1;
+  const marginPct = margin * 100;
+  const exposure = settings.stake * Math.max(1, settings.contracts);
+  const winPnl = liveWinPnl(
+    settings.stake,
+    settings.contracts,
+    payoutCtxFromSettings(settings),
+  );
+  const winsForTp =
+    settings.takeProfit > 0 && winPnl > 0
+      ? runsForTakeProfit(
+          settings.takeProfit,
+          settings.stake,
+          settings.contracts,
+          payoutCtxFromSettings(settings),
+        )
+      : 0;
+  const winsWhen =
+    side === "DIGITOVER"
+      ? `last digit > ${barrier}`
+      : `last digit < ${barrier}`;
+  const tradeCap = settings.maxRuns;
+  const bulkHours = settings.sessionHours ?? 0;
+  const bulk = ouBulkPresetForRuns(
+    tradeCap,
+    settings.maxRunsManual,
+    bulkHours,
+  );
+  const durationLabel = formatSessionDuration(bulkHours);
+
+  return (
+    <div className="bot-ou-math" aria-label="Over Under profit calculation">
+      <strong className="bot-ou-math__title">Profit calculation</strong>
+      <p className="bot-ou-math__contract">
+        {sideLabel(side)} {barrier} wins when {winsWhen}. Fair ~{fair.toFixed(0)}%
+        · payout ×{payout.toFixed(2)} ({marginPct.toFixed(0)}% margin).
+      </p>
+      <ul className="bot-ou-math__list">
+        <li>
+          <span>One win</span>
+          <em>
+            stake {exposure.toFixed(2)} × {marginPct.toFixed(0)}% = +
+            {winPnl.toFixed(2)} {currency}
+          </em>
+        </li>
+        <li>
+          <span>Session</span>
+          <em>
+            {bulkHours > 0
+              ? `full ${durationLabel} clock · stake ${exposure.toFixed(2)} every trade`
+              : settings.takeProfit > 0
+                ? `Quick · TP +${settings.takeProfit.toFixed(2)} (~${winsForTp} wins)`
+                : "Quick · no TP"}
+          </em>
+        </li>
+        <li>
+          <span>Stops when</span>
+          <em>
+            {bulkHours > 0
+              ? `${durationLabel} ends · or SL −${settings.stopLoss.toFixed(2)} · or Stop · now ${runsThisStart} trades`
+              : tradeCap > 0
+                ? `TP / run cap ${tradeCap} / SL · now ${runsThisStart}/${tradeCap}`
+                : `TP / SL · now ${runsThisStart} trades`}
+          </em>
+        </li>
+      </ul>
+      <p className="bot-ou-math__note">
+        {bulkHours > 0
+          ? `${durationLabel} timed mode ignores take profit as a stop. If P/L passes TP it keeps trading until the clock finishes.`
+          : bulk === "quick"
+            ? "Quick mode stops on take profit (one barrier win by default)."
+            : "Whichever limit hits first stops the Start."}
+      </p>
+    </div>
+  );
 }
 
 function PayoutNotice({ settings }: { settings: BotSettings }) {
@@ -256,6 +481,8 @@ export function BotPanel({
   scanning = false,
   operatorControlled = false,
   differsFastActive = false,
+  matchesFirmActive = false,
+  overUnderActive = false,
   isVirtual = true,
   liveProfileActive = false,
   tradingMode = "paper",
@@ -263,9 +490,31 @@ export function BotPanel({
   settling = false,
   onChange,
   onSelectSide,
+  onSelectDesk,
   onRestoreDiffersFast,
+  onRestoreMatchesFirm,
+  onRestoreOverUnder,
   onToggle,
 }: BotPanelProps) {
+  const tradeDesk = deskOf(settings.side);
+  const isOverUnderDesk = tradeDesk === "overunder";
+  const isMatchesSide = settings.side === "DIGITMATCH";
+  /** Keep Custom clock open even if duration equals 1h / 4h / 8h. */
+  const [customClockOpen, setCustomClockOpen] = useState(() => {
+    if (deskOf(settings.side) !== "overunder") return false;
+    return (
+      ouBulkPresetForRuns(
+        settings.maxRuns,
+        settings.maxRunsManual,
+        settings.sessionHours,
+      ) === "custom"
+    );
+  });
+  const paceChoices = isOverUnderDesk
+    ? OVER_UNDER_ANALYZER_PACES
+    : isMatchesSide
+      ? MATCHES_ANALYZER_PACES
+      : ANALYZER_PACES;
   // Mirrors the bot's own sizing, cap included, so the figure on screen is
   // the figure that will actually be staked.
   const nextStake = useMemo(() => {
@@ -320,14 +569,18 @@ export function BotPanel({
     settings.contracts >= 1 &&
     (config.mode === "paper" || connectionReady);
 
-  const contractName = settings.side === "DIGITMATCH" ? "Matches" : "Differs";
+  const contractName = sideLabel(settings.side);
 
   return (
     <aside className="bot-panel bot-panel--full">
       <div className="bot-panel__head">
         <div>
           <h2>Trade bot</h2>
-          <p>Matches · Differs · risk · filters</p>
+          <p>
+            {isOverUnderDesk
+              ? "Over/Under · barrier · risk · filters"
+              : "Matches · Differs · risk · filters"}
+          </p>
         </div>
         <div className="bot-panel__badges">
           <span className={`badge ${config.mode === "paper" ? "badge--paper" : "badge--live"}`}>
@@ -343,17 +596,17 @@ export function BotPanel({
         <div className="bot-status-row">
           <div>
             <span>Contract</span>
-            <strong>{settings.side === "DIGITMATCH" ? "Matches" : "Differs"}</strong>
+            <strong>{contractName}</strong>
           </div>
           <div>
-            <span>Digit</span>
+            <span>{isOverUnderDesk ? "Barrier" : "Digit"}</span>
             <strong>{settings.prediction}</strong>
           </div>
           <div>
             <span>Open</span>
             <strong>
               {session.open
-                ? `${session.open.side === "DIGITMATCH" ? "M" : "D"}${session.open.digit}`
+                ? `${sideShort(session.open.side)}${session.open.digit}`
                 : "Flat"}
             </strong>
           </div>
@@ -401,40 +654,117 @@ export function BotPanel({
         </div>
       ) : null}
 
-      <ModeChooser
-        value={settings.side}
-        auto={settings.autoSide}
-        disabled={busy}
-        onChange={onSelectSide}
-        onEnableAuto={() => onChange({ ...settings, autoSide: true })}
-      />
+      {onSelectDesk ? (
+        <DeskSwitch
+          value={tradeDesk}
+          disabled={Boolean(settling)}
+          onChange={onSelectDesk}
+        />
+      ) : null}
+
+      {isOverUnderDesk ? (
+        <OverUnderChooser
+          value={settings.side}
+          auto={settings.autoSide}
+          disabled={Boolean(settling)}
+          onChange={onSelectSide}
+          onEnableAuto={() =>
+            onChange({ ...settings, autoSide: true, autoFollow: true })
+          }
+        />
+      ) : (
+        <ModeChooser
+          value={settings.side === "DIGITMATCH" ? "DIGITMATCH" : "DIGITDIFF"}
+          auto={settings.autoSide}
+          // Only lock while a contract is open — never during scan/hunt.
+          disabled={Boolean(settling)}
+          onChange={onSelectSide}
+          onEnableAuto={() =>
+            onChange({ ...settings, autoSide: true, autoFollow: true })
+          }
+        />
+      )}
 
       <Section title="Order">
         <div className="bot-panel__grid">
           <label className="bot-field">
-            <span>Prediction digit</span>
+            <span>{isOverUnderDesk ? "Barrier digit" : "Prediction digit"}</span>
             <select
-              value={settings.prediction}
-              onChange={(event) =>
-                onChange({
-                  ...settings,
-                  prediction: Number(event.target.value),
-                  autoFollow: false,
-                })
+              value={
+                isOverUnderDesk
+                  ? ((settings.side === "DIGITUNDER"
+                      ? OU_UNDER_BARRIERS
+                      : OU_OVER_BARRIERS) as readonly number[]
+                    ).includes(settings.prediction)
+                    ? settings.prediction
+                    : settings.side === "DIGITUNDER"
+                      ? 8
+                      : 1
+                  : settings.prediction
               }
+              onChange={(event) => {
+                const prediction = Number(event.target.value);
+                const next = {
+                  ...settings,
+                  prediction,
+                  autoFollow: false,
+                };
+                if (!isOverUnderDesk) {
+                  onChange(next);
+                  return;
+                }
+                onChange(
+                  withStakeLinkedLimits(
+                    next,
+                    next.stake,
+                    balance,
+                    tradingMode,
+                    isVirtual,
+                  ),
+                );
+              }}
             >
-              {Array.from({ length: 10 }, (_, digit) => (
-                <option key={digit} value={digit}>
-                  {digit}
-                </option>
-              ))}
+              {isOverUnderDesk
+                ? (settings.side === "DIGITUNDER"
+                    ? [...OU_UNDER_BARRIERS]
+                    : [...OU_OVER_BARRIERS]
+                  ).map((digit) => {
+                    const ouSide =
+                      settings.side === "DIGITUNDER"
+                        ? "DIGITUNDER"
+                        : "DIGITOVER";
+                    const mult = overUnderPayoutMultiplier(ouSide, digit);
+                    const fair = fairWinProb(ouSide, digit) * 100;
+                    return (
+                      <option key={digit} value={digit}>
+                        {digit} · ×{mult.toFixed(2)} · fair {fair.toFixed(0)}%
+                      </option>
+                    );
+                  })
+                : Array.from({ length: 10 }, (_, digit) => (
+                    <option key={digit} value={digit}>
+                      {digit}
+                    </option>
+                  ))}
             </select>
-            {selectedDigit !== null ? (
+            {isOverUnderDesk ? (
+              <small className="bot-field__hint">
+                {settings.autoFollow
+                  ? "Analyzer follows live Over/Under barrier"
+                  : settings.side === "DIGITOVER"
+                    ? "Wins when last digit is over this barrier"
+                    : "Wins when last digit is under this barrier"}
+              </small>
+            ) : selectedDigit !== null ? (
               <button
                 type="button"
                 className="bot-link"
                 onClick={() =>
-                  onChange({ ...settings, prediction: selectedDigit, autoFollow: false })
+                  onChange({
+                    ...settings,
+                    prediction: selectedDigit,
+                    autoFollow: false,
+                  })
                 }
               >
                 Use market digit {selectedDigit}
@@ -506,7 +836,15 @@ export function BotPanel({
           </label>
         </div>
 
-        {settings.side === "DIGITDIFF" ? <PayoutNotice settings={settings} /> : null}
+        {settings.side === "DIGITDIFF" ? (
+          <PayoutNotice settings={settings} />
+        ) : isOverUnderDesk ? (
+          <OuProfitMath
+            settings={settings}
+            currency={currency}
+            runsThisStart={runsThisStart}
+          />
+        ) : null}
 
         <div className="bot-panel__grid">
 
@@ -525,6 +863,165 @@ export function BotPanel({
       </Section>
 
       <Section title="Run limits">
+        {isOverUnderDesk ? (
+          <div className="bot-bulk-hours" aria-label="Bulk session length">
+            <span className="bot-bulk-hours__label">Bulk session</span>
+            <div className="bot-bulk-hours__row">
+              {OU_BULK_SESSION_PRESETS.map((preset) => {
+                const presetId = ouBulkPresetForRuns(
+                  settings.maxRuns,
+                  settings.maxRunsManual,
+                  settings.sessionHours,
+                );
+                const customOpen =
+                  customClockOpen || presetId === "custom";
+                const active =
+                  preset.id === "custom"
+                    ? customOpen
+                    : !customOpen && presetId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`bot-bulk-hours__btn${active ? " is-active" : ""}`}
+                    disabled={busy}
+                    onClick={() => {
+                      if (preset.id === "custom") {
+                        setCustomClockOpen(true);
+                        onChange(
+                          applyOuBulkSession(
+                            settings,
+                            "custom",
+                            isVirtual,
+                          ),
+                        );
+                        return;
+                      }
+                      setCustomClockOpen(false);
+                      onChange(
+                        applyOuBulkSession(settings, preset.id, isVirtual),
+                      );
+                    }}
+                  >
+                    {preset.label}
+                    {preset.id === "quick" ? (
+                      <em>TP stops</em>
+                    ) : preset.id === "custom" ? (
+                      <em>
+                        {customOpen && (settings.sessionHours ?? 0) > 0
+                          ? formatSessionDuration(settings.sessionHours ?? 0)
+                          : "set clock"}
+                      </em>
+                    ) : (
+                      <em>full clock · TP ignored</em>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {customClockOpen ||
+            ouBulkPresetForRuns(
+              settings.maxRuns,
+              settings.maxRunsManual,
+              settings.sessionHours,
+            ) === "custom" ? (
+              <div className="bot-bulk-clock" aria-label="Custom session clock">
+                <div className="bot-bulk-clock__face">
+                  <label className="bot-bulk-clock__unit">
+                    <span>Hours</span>
+                    <CleanNumberInput
+                      className="bot-bulk-clock__digits"
+                      min={0}
+                      max={72}
+                      integer
+                      value={
+                        sessionPartsFromHours(
+                          settings.sessionHours && settings.sessionHours > 0
+                            ? settings.sessionHours
+                            : 0.5,
+                        ).hours
+                      }
+                      disabled={busy}
+                      aria-label="Session hours"
+                      onCommit={(hours) => {
+                        setCustomClockOpen(true);
+                        const mins = sessionPartsFromHours(
+                          settings.sessionHours && settings.sessionHours > 0
+                            ? settings.sessionHours
+                            : 0.5,
+                        ).minutes;
+                        const nextMins = hours <= 0 && mins <= 0 ? 30 : mins;
+                        onChange(
+                          applyOuBulkSession(
+                            settings,
+                            "custom",
+                            isVirtual,
+                            sessionHoursFromParts(hours, nextMins),
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                  <span className="bot-bulk-clock__colon" aria-hidden>
+                    :
+                  </span>
+                  <label className="bot-bulk-clock__unit">
+                    <span>Minutes</span>
+                    <CleanNumberInput
+                      className="bot-bulk-clock__digits"
+                      min={0}
+                      max={59}
+                      integer
+                      value={
+                        sessionPartsFromHours(
+                          settings.sessionHours && settings.sessionHours > 0
+                            ? settings.sessionHours
+                            : 0.5,
+                        ).minutes
+                      }
+                      disabled={busy}
+                      aria-label="Session minutes"
+                      onCommit={(minutes) => {
+                        setCustomClockOpen(true);
+                        const hours = sessionPartsFromHours(
+                          settings.sessionHours && settings.sessionHours > 0
+                            ? settings.sessionHours
+                            : 0.5,
+                        ).hours;
+                        const nextHours =
+                          hours <= 0 && minutes <= 0 ? 0 : hours;
+                        const nextMins =
+                          nextHours <= 0 && minutes <= 0 ? 1 : minutes;
+                        onChange(
+                          applyOuBulkSession(
+                            settings,
+                            "custom",
+                            isVirtual,
+                            sessionHoursFromParts(nextHours, nextMins),
+                          ),
+                        );
+                      }}
+                    />
+                  </label>
+                </div>
+                <em className="bot-bulk-clock__sum">
+                  Runs{" "}
+                  {formatSessionDuration(
+                    settings.sessionHours && settings.sessionHours > 0
+                      ? settings.sessionHours
+                      : 0.5,
+                  )}{" "}
+                  · stake {settings.stake.toFixed(2)} each trade · TP ignored
+                </em>
+              </div>
+            ) : null}
+            <small className="bot-field__hint">
+              Timed cards (1h / 4h / 8h / Custom) run the full wall clock at your
+              set stake. Take profit does not stop the bot. Quick = stop on take
+              profit. Custom opens the clock so you can type hours and minutes.
+            </small>
+          </div>
+        ) : null}
         <div className="bot-runctl">
           <label className="bot-runctl__card">
             <span>Take profit</span>
@@ -535,27 +1032,48 @@ export function BotPanel({
                 value={settings.takeProfit}
                 disabled={busy}
                 onCommit={(takeProfit) => {
+                  const timed = (settings.sessionHours ?? 0) > 0;
+                  if (timed) {
+                    // Comfort marker only — timed session still runs the full clock.
+                    onChange({
+                      ...settings,
+                      takeProfit,
+                      takeProfitManual: true,
+                      dailyProfitTarget: 0,
+                    });
+                    return;
+                  }
+                  const ctx = payoutCtxFromSettings(settings);
                   const limits = profitLimitsForStake(
                     settings.stake,
                     settings.contracts,
                     isVirtual,
                     takeProfit,
+                    ctx,
                   );
                   onChange({
                     ...settings,
                     ...limits,
                     takeProfitManual: true,
+                    maxRunsManual: false,
+                    sessionHours: 0,
                   });
                 }}
               />
               <em>{currency}</em>
             </div>
             <small>
-              {settings.takeProfit > 0
-                ? settings.takeProfitManual
-                  ? `Custom · stops this Start at +${settings.takeProfit.toFixed(2)} ${currency}`
-                  : `Auto from stake · stops at +${settings.takeProfit.toFixed(2)} ${currency}`
-                : "0 = off"}
+              {(settings.sessionHours ?? 0) > 0
+                ? settings.takeProfit > 0
+                  ? `Comfort only · ${formatSessionDuration(settings.sessionHours ?? 0)} timed keeps trading past +${settings.takeProfit.toFixed(2)} until the clock ends`
+                  : `${formatSessionDuration(settings.sessionHours ?? 0)} timed · no TP stop · runs until clock ends`
+                : settings.takeProfit > 0
+                  ? settings.takeProfitManual
+                    ? `Stops this Start at +${settings.takeProfit.toFixed(2)} ${currency}`
+                    : isOverUnderDesk
+                      ? `Auto = one ${contractName} win · stop at +${settings.takeProfit.toFixed(2)} ${currency}`
+                      : `Auto from stake · stop at +${settings.takeProfit.toFixed(2)} ${currency}`
+                  : "0 = off"}
             </small>
           </label>
           <label className="bot-runctl__card">
@@ -585,48 +1103,57 @@ export function BotPanel({
                 integer
                 value={settings.maxRuns}
                 disabled={busy}
-                onCommit={(maxRuns) => onChange({ ...settings, maxRuns })}
+                onCommit={(maxRuns) =>
+                  onChange({
+                    ...settings,
+                    maxRuns,
+                    maxRunsManual: true,
+                    maxTradesPerDay: Math.max(
+                      settings.maxTradesPerDay,
+                      maxRuns + 24,
+                    ),
+                  })
+                }
               />
-              <em>runs</em>
+              <em>trades</em>
             </div>
             <small>
-              {settings.maxRuns > 0 && settings.takeProfit > 0 ? (
-                <>
-                  Flow · {settings.maxRuns} runs this Start (then TP +
-                  {settings.takeProfit.toFixed(2)} {currency}) · now{" "}
-                  {runsThisStart}/{settings.maxRuns}
-                </>
-              ) : settings.maxRuns > 0 ? (
-                `Flow · ${runsThisStart}/${settings.maxRuns} runs this Start`
-              ) : (
-                `0 = off · ${runsThisStart} this Start`
-              )}
+              {(settings.sessionHours ?? 0) > 0
+                ? `${formatSessionDuration(settings.sessionHours ?? 0)} timed · unlimited trades until the clock ends · now ${runsThisStart}`
+                : settings.maxRuns > 0
+                  ? `Hard cap · stop after ${settings.maxRuns} settled trades · now ${runsThisStart}/${settings.maxRuns}`
+                  : `0 = unlimited trades · ${runsThisStart} this Start`}
             </small>
           </label>
         </div>
-        {settings.maxRuns > 0 || settings.takeProfit > 0 ? (
+        {!isOverUnderDesk &&
+        (settings.maxRuns > 0 || settings.takeProfit > 0) ? (
           <p className="bot-runctl__hint">
             {(() => {
-              const winPnl = liveWinPnl(settings.stake, settings.contracts);
-              const runs = settings.maxRuns > 0 ? settings.maxRuns : 0;
-              const ifAllWin = runs > 0 ? winPnl * runs : null;
-              const parts: string[] = [];
-              parts.push(
-                `One ${contractName} win ≈ +${winPnl.toFixed(2)} ${currency}`,
+              const ctx = payoutCtxFromSettings(settings);
+              const winPnl = liveWinPnl(
+                settings.stake,
+                settings.contracts,
+                ctx,
               );
-              if (ifAllWin !== null) {
+              const winsForTp =
+                settings.takeProfit > 0 && winPnl > 0
+                  ? runsForTakeProfit(
+                      settings.takeProfit,
+                      settings.stake,
+                      settings.contracts,
+                      ctx,
+                    )
+                  : 0;
+              const parts: string[] = [];
+              parts.push(`One win ≈ +${winPnl.toFixed(2)} ${currency}`);
+              if (settings.takeProfit > 0 && winsForTp > 0) {
                 parts.push(
-                  `${runs} wins in a row ≈ +${ifAllWin.toFixed(2)} ${currency}`,
+                  `TP +${settings.takeProfit.toFixed(2)} needs ~${winsForTp} wins`,
                 );
               }
-              if (
-                settings.takeProfit > 0 &&
-                ifAllWin !== null &&
-                ifAllWin < settings.takeProfit
-              ) {
-                parts.push(
-                  `run cap hits first — raise runs or stake to reach TP +${settings.takeProfit.toFixed(2)}`,
-                );
+              if (settings.maxRuns > 0) {
+                parts.push(`trade cap ${settings.maxRuns}`);
               }
               if (busy || runsThisStart > 0) {
                 parts.push(
@@ -638,11 +1165,70 @@ export function BotPanel({
               return parts.join(" · ");
             })()}
           </p>
+        ) : isOverUnderDesk && (busy || runsThisStart > 0) ? (
+          <p className="bot-runctl__hint">
+            This Start {runsThisStart}
+            {settings.maxRuns > 0 ? `/${settings.maxRuns}` : ""} · P/L{" "}
+            {pnlThisStart >= 0 ? "+" : ""}
+            {pnlThisStart.toFixed(2)} {currency}
+          </p>
         ) : null}
       </Section>
 
+      <Section title="Analyzer pace">
+        <p className="bot-pace__intro">
+          {isMatchesSide ? (
+            <>
+              Matches firm hunts the best hot market, proves briefly, then buys
+              same-tick. HIGH unique only.
+            </>
+          ) : (
+            <>
+              Same firm HIGH gates either way — only wait times change. Steady is
+              what you have now.
+            </>
+          )}
+        </p>
+        <div className="bot-pace" role="radiogroup" aria-label="Analyzer pace">
+          {paceChoices.map((pace) => {
+            const active = (settings.analyzerPace ?? "steady") === pace.id;
+            return (
+              <button
+                key={pace.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                className={`bot-pace__option ${active ? "is-active" : ""} ${
+                  pace.recommended ? "is-recommended" : ""
+                }`}
+                disabled={busy}
+                onClick={() => {
+                  const id = pace.id as AnalyzerPaceId;
+                  onChange({
+                    ...settings,
+                    analyzerPace: id,
+                    cooldownTicks: pace.cooldownTicks,
+                  });
+                }}
+              >
+                <span className="bot-pace__title">
+                  {pace.label}
+                  {pace.recommended ? (
+                    <em className="bot-pace__badge">Recommended</em>
+                  ) : null}
+                </span>
+                <small>{pace.blurb}</small>
+              </button>
+            );
+          })}
+        </div>
+      </Section>
+
       <Section title="Follow">
-        {onRestoreDiffersFast || onApplyLiveSettings ? (
+        {onRestoreDiffersFast ||
+        onRestoreMatchesFirm ||
+        onRestoreOverUnder ||
+        onApplyLiveSettings ? (
           <div className="bot-profile-row">
             <p className="bot-profile-row__copy">
               {tradingMode === "live" && liveProfileActive ? (
@@ -660,11 +1246,25 @@ export function BotPanel({
                 )
               ) : tradingMode === "live" ? (
                 <>Live mode · apply recommended settings before Start</>
+              ) : overUnderActive ? (
+                <>
+                  <strong>Over/Under Blitz</strong> · high-hit barriers · prove
+                  ~2s · same-tick · runs ({settings.maxRuns || "∞"})
+                </>
+              ) : matchesFirmActive ? (
+                <>
+                  <strong>Matches firm</strong> · hunt best hot · short prove ·
+                  same-tick · runs ({settings.maxRuns || "∞"})
+                </>
               ) : differsFastActive ? (
                 <>
                   <strong>Differs</strong> · Digits Good each entry · Number of
                   runs owns this Start ({settings.maxRuns || "∞"})
                 </>
+              ) : isOverUnderDesk ? (
+                <>Custom Over/Under settings · not on O/U profile</>
+              ) : isMatchesSide ? (
+                <>Custom Matches settings · not on Matches firm</>
               ) : (
                 <>Custom bot settings · not on the Differs profile</>
               )}
@@ -678,7 +1278,35 @@ export function BotPanel({
               >
                 {liveProfileActive ? "Refresh live settings" : "Apply live settings"}
               </button>
-            ) : tradingMode !== "live" && !differsFastActive && onRestoreDiffersFast ? (
+            ) : tradingMode !== "live" &&
+              isOverUnderDesk &&
+              !overUnderActive &&
+              onRestoreOverUnder ? (
+              <button
+                type="button"
+                className="bot-link"
+                disabled={busy}
+                onClick={onRestoreOverUnder}
+              >
+                Restore Over/Under profile
+              </button>
+            ) : tradingMode !== "live" &&
+              isMatchesSide &&
+              !matchesFirmActive &&
+              onRestoreMatchesFirm ? (
+              <button
+                type="button"
+                className="bot-link"
+                disabled={busy}
+                onClick={onRestoreMatchesFirm}
+              >
+                Restore Matches firm
+              </button>
+            ) : tradingMode !== "live" &&
+              !isMatchesSide &&
+              !isOverUnderDesk &&
+              !differsFastActive &&
+              onRestoreDiffersFast ? (
               <button
                 type="button"
                 className="bot-link"
@@ -709,7 +1337,7 @@ export function BotPanel({
             onChange={(event) => onChange({ ...settings, autoSide: event.target.checked })}
           />
           <span>
-            Auto Matches / Differs
+            {isOverUnderDesk ? "Auto Over / Under" : "Auto Matches / Differs"}
             <small>Off = you pick the side with the cards above.</small>
           </span>
         </label>
@@ -1177,7 +1805,7 @@ export function BotPanel({
           ? "Locked · AI Operator"
           : settings.running
             ? settling
-              ? "Stop · settling"
+              ? "Stop · in trade"
               : "Stop trade"
             : scanning
               ? "Cancel · scanning markets"
@@ -1197,7 +1825,7 @@ export function BotPanel({
               <li key={entry.id}>
                 <em className={entry.won ? "is-up" : "is-down"}>{entry.won ? "W" : "L"}</em>
                 <span>
-                  {entry.side === "DIGITMATCH" ? "M" : "D"}
+                  {sideShort(entry.side)}
                   {entry.digit} → {entry.settleDigit ?? "?"}
                 </span>
                 <strong className={entry.pnl >= 0 ? "is-up" : "is-down"}>

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import type { ConnectionState } from "../lib/deriv/types";
-import type { AppConfig } from "../lib/config";
 import { useKesRate } from "../hooks/useFxRate";
 import { storageKey } from "../lib/platform";
 
@@ -32,10 +31,8 @@ interface StatusBarProps {
   state: ConnectionState;
   symbol: string;
   loginId: string | null;
-  isVirtual: boolean;
   balance: number | null;
   currency: string;
-  mode: AppConfig["mode"];
   onReconnect: () => void;
 }
 
@@ -43,10 +40,8 @@ export function StatusBar({
   state,
   symbol,
   loginId,
-  isVirtual,
   balance,
   currency,
-  mode,
   onReconnect,
 }: StatusBarProps) {
   const showReconnect = state === "error" || state === "closed";
@@ -84,20 +79,6 @@ export function StatusBar({
         <span className={`status-dot status-dot--${state}`} aria-hidden="true" />
         <span className="status__state">{STATE_LABELS[state]}</span>
         <span className="status__symbol">{symbol}</span>
-      </div>
-      <div className="status__tags">
-        <span
-          className={`badge badge--circle ${isVirtual ? "badge--demo" : "badge--real"}`}
-          title={isVirtual ? "Demo" : "Real"}
-        >
-          {isVirtual ? "D" : "R"}
-        </span>
-        <span
-          className={`badge badge--circle ${mode === "paper" ? "badge--paper" : "badge--live"}`}
-          title={mode === "paper" ? "Paper" : "Live"}
-        >
-          {mode === "paper" ? "P" : "L"}
-        </span>
       </div>
       {loginId ? <div className="status__login">{loginId}</div> : null}
       {amount !== null ? (

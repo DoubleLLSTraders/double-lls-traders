@@ -13,3 +13,8 @@ export function useAppAuth(): AppAuth {
   if (!ctx) throw new Error("useAppAuth must be used inside AuthProvider.");
   return ctx;
 }
+
+/** Client desk has no Google AuthProvider — returns null. */
+export function useOptionalAppAuth(): AppAuth | null {
+  return useContext(AuthContext);
+}

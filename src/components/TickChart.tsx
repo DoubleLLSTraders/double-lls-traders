@@ -9,8 +9,16 @@ interface TickChartProps {
   maxPoints?: number;
   /** True while the live stream is swapping markets (ticks stay until replace). */
   syncing?: boolean;
-  /** Settled trades to mark on the chart (newest first). */
-  tradeMarkers?: Array<{ epoch: number; won: boolean; pnl?: number }>;
+  /** Settled / open trades to mark on the chart (newest first). */
+  tradeMarkers?: Array<{
+    epoch: number;
+    won: boolean;
+    pnl?: number;
+    /** Live open or lasting entry pin (kept after settle). */
+    pending?: boolean;
+    /** entry = buy pin · open = in-trade · result = W/L on settle tick */
+    kind?: "entry" | "open" | "result";
+  }>;
 }
 
 interface ResultFlash {
@@ -103,14 +111,18 @@ export function TickChart({
     setResultFlash(null);
   }, [symbol]);
 
-  // Big WIN / LOSS pop on the chart when a trade settles.
+  // Big WIN / LOSS pop when a result lands (not on entry pins).
   useEffect(() => {
-    const newest = tradeMarkers[0];
+    const newest = tradeMarkers.find(
+      (m) => m.kind === "result" || (!m.pending && m.kind !== "entry"),
+    );
     if (!newest) return;
     const key = `${newest.epoch}|${newest.won ? "W" : "L"}|${newest.pnl ?? ""}`;
     if (seenSettleRef.current === key) return;
-    // Skip the first mount flood of old journal rows — only flash live settles.
-    if (seenSettleRef.current === null && tradeMarkers.length > 1) {
+    const settled = tradeMarkers.filter(
+      (m) => m.kind === "result" || (!m.pending && m.kind !== "entry"),
+    );
+    if (seenSettleRef.current === null && settled.length > 1) {
       seenSettleRef.current = key;
       return;
     }
@@ -166,7 +178,13 @@ export function TickChart({
         latestX: width - pad.right,
         yTicks: [] as number[],
         xLabels: [] as Array<{ x: number; label: string }>,
-        markers: [] as Array<{ x: number; y: number; won: boolean }>,
+        markers: [] as Array<{
+          x: number;
+          y: number;
+          won: boolean;
+          pending?: boolean;
+          kind?: "entry" | "open" | "result";
+        }>,
         points: [] as ChartPoint[],
         plotBottom: height - pad.bottom,
         plotRight: width - pad.right,
@@ -243,7 +261,13 @@ export function TickChart({
             bestDist = dist;
           }
         }
-        return { x: best.x, y: best.y, won: marker.won };
+        return {
+          x: best.x,
+          y: best.y,
+          won: marker.won,
+          pending: marker.pending === true || marker.kind === "entry",
+          kind: marker.kind ?? (marker.pending ? "open" : "result"),
+        };
       });
 
     return {
@@ -577,14 +601,25 @@ export function TickChart({
                 strokeWidth="2"
               />
 
-              {chart.markers.map((marker, index) => (
-                <g key={`m-${index}-${marker.x}`}>
+              {chart.markers.map((marker, index) => {
+                const isEntry =
+                  marker.kind === "entry" ||
+                  marker.kind === "open" ||
+                  marker.pending;
+                return (
+                <g key={`m-${index}-${marker.x}-${marker.kind ?? "r"}`}>
                   <circle
                     cx={marker.x}
                     cy={marker.y}
-                    r="7"
+                    r={isEntry ? 9 : 7}
                     className={
-                      marker.won ? "tick-chart__mark--win" : "tick-chart__mark--loss"
+                      isEntry
+                        ? marker.kind === "open"
+                          ? "tick-chart__mark--open"
+                          : "tick-chart__mark--entry"
+                        : marker.won
+                          ? "tick-chart__mark--win"
+                          : "tick-chart__mark--loss"
                     }
                   />
                   <text
@@ -593,10 +628,11 @@ export function TickChart({
                     textAnchor="middle"
                     className="tick-chart__mark-label"
                   >
-                    {marker.won ? "W" : "L"}
+                    {isEntry ? "E" : marker.won ? "W" : "L"}
                   </text>
                 </g>
-              ))}
+                );
+              })}
 
               {hover ? (
                 <g className="tick-chart__hover" pointerEvents="none">

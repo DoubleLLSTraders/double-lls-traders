@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import type { DigitStats } from "../lib/analysis/digits";
+import { deskOf, sideLabel, type TradeDesk } from "../lib/analysis/contractSide";
 import { buildAiBrief } from "../lib/analysis/explain";
 import {
   confirmScore,
@@ -10,19 +11,24 @@ import {
 import { evaluateEntry } from "../lib/bot/gates";
 import type { Tick } from "../lib/deriv/types";
 import type { BotSettings } from "./BotPanel";
+import { DeskSwitch } from "./DeskSwitch";
 import { ModeChooser } from "./ModeChooser";
+import { OverUnderChooser } from "./OverUnderChooser";
 
 interface AnalyzerPopupProps {
   stats: DigitStats;
   signal: MarketSignal;
   matchSignal: MarketSignal;
   diffSignal: MarketSignal;
+  overSignal?: MarketSignal;
+  underSignal?: MarketSignal;
   bot: BotSettings;
   latest: Tick | undefined;
   symbol: string;
   disabled?: boolean;
   onApply: (next: Partial<BotSettings>) => void;
   onSelectSide: (side: BotSettings["side"]) => void;
+  onSelectDesk?: (desk: TradeDesk) => void;
   onOpenMarket: () => void;
 }
 
@@ -31,12 +37,15 @@ export function AnalyzerPopup({
   signal,
   matchSignal,
   diffSignal,
+  overSignal,
+  underSignal,
   bot,
   latest,
   symbol,
   disabled = false,
   onApply,
   onSelectSide,
+  onSelectDesk,
   onOpenMarket,
 }: AnalyzerPopupProps) {
   const focusPct = stats.percentages[bot.prediction] ?? 0;
@@ -44,6 +53,9 @@ export function AnalyzerPopup({
   const score = confirmScore(signal);
   const matchScore = confirmScore(matchSignal);
   const diffScore = confirmScore(diffSignal);
+  const overScore = overSignal ? confirmScore(overSignal) : 0;
+  const underScore = underSignal ? confirmScore(underSignal) : 0;
+  const ouDesk = deskOf(bot.side) === "overunder";
 
   const gate = useMemo(
     () => evaluateEntry(bot, signal, { symbol }),
@@ -61,25 +73,27 @@ export function AnalyzerPopup({
     [signal, stats, gate, bot.prediction, bot.minEdgePercent],
   );
 
-  // Manual by default — do not force auto on mount.
-
   return (
     <aside className="analyzer-panel" aria-label="Live market analyzer">
       <div className="analyzer-panel__head">
         <div>
           <h3>Analyzer</h3>
           <p>
-            {!bot.autoSide
-              ? bot.side === "DIGITDIFF"
-                ? "Differs · you chose the side · bot picks the cold barrier."
-                : "Matches · you chose the side · bot picks the hot digit."
-              : bot.sidePreference === "differs"
-                ? "Auto · Differs when the analyzer arms it."
-                : bot.sidePreference === "matches"
-                  ? "Auto · Matches when the analyzer arms it."
-                  : bot.sidePreference === "winrate"
-                    ? "Auto · Differs first, Matches as fallback."
-                    : "Auto · whichever side has the stronger edge."}
+            {ouDesk
+              ? !bot.autoSide
+                ? `${sideLabel(bot.side)} · you chose the side · bot picks the barrier.`
+                : "Auto · Over or Under with the stronger barrier edge."
+              : !bot.autoSide
+                ? bot.side === "DIGITDIFF"
+                  ? "Differs · you chose the side · bot picks the cold barrier."
+                  : "Matches · you chose the side · bot picks the hot digit."
+                : bot.sidePreference === "differs"
+                  ? "Auto · Differs when the analyzer arms it."
+                  : bot.sidePreference === "matches"
+                    ? "Auto · Matches when the analyzer arms it."
+                    : bot.sidePreference === "winrate"
+                      ? "Auto · Differs first, Matches as fallback."
+                      : "Auto · whichever side has the stronger edge."}
           </p>
         </div>
         <button type="button" className="analyzer-panel__link" onClick={onOpenMarket}>
@@ -87,13 +101,31 @@ export function AnalyzerPopup({
         </button>
       </div>
 
-      <ModeChooser
-        value={bot.side}
-        auto={bot.autoSide}
-        disabled={disabled}
-        onChange={onSelectSide}
-        onEnableAuto={() => onApply({ autoSide: true })}
-      />
+      {onSelectDesk ? (
+        <DeskSwitch
+          value={deskOf(bot.side)}
+          disabled={disabled}
+          onChange={onSelectDesk}
+        />
+      ) : null}
+
+      {ouDesk ? (
+        <OverUnderChooser
+          value={bot.side}
+          auto={bot.autoSide}
+          disabled={disabled}
+          onChange={onSelectSide}
+          onEnableAuto={() => onApply({ autoSide: true })}
+        />
+      ) : (
+        <ModeChooser
+          value={bot.side === "DIGITMATCH" ? "DIGITMATCH" : "DIGITDIFF"}
+          auto={bot.autoSide}
+          disabled={disabled}
+          onChange={onSelectSide}
+          onEnableAuto={() => onApply({ autoSide: true })}
+        />
+      )}
 
       <div className="analyzer-live">
         <div>
@@ -116,9 +148,11 @@ export function AnalyzerPopup({
           </strong>
         </div>
         <div>
-          <span>M / D score</span>
+          <span>{ouDesk ? "O / U score" : "M / D score"}</span>
           <strong>
-            {matchScore} · {diffScore}
+            {ouDesk
+              ? `${overScore} · ${underScore}`
+              : `${matchScore} · ${diffScore}`}
           </strong>
         </div>
         <div>
@@ -192,12 +226,18 @@ export function AnalyzerPopup({
       </div>
 
       <div className="analyzer-check">
-        <span>Bot digit {bot.prediction}</span>
-        <strong>{focusPct.toFixed(1)}%</strong>
+        <span>
+          {ouDesk ? "Bot barrier" : "Bot digit"} {bot.prediction}
+        </span>
+        <strong>
+          {ouDesk ? `${signal.digitPercent.toFixed(1)}%` : `${focusPct.toFixed(1)}%`}
+        </strong>
         <p>
-          {focusPct - 10 >= 0 ? "+" : ""}
-          {(focusPct - 10).toFixed(1)} vs 10% ·{" "}
-          {focusGap === null ? "absent" : `${focusGap} ticks ago`}
+          {ouDesk
+            ? `${sideLabel(signal.side)} · gap ${signal.watching.signalGap ?? "—"}`
+            : `${focusPct - 10 >= 0 ? "+" : ""}${(focusPct - 10).toFixed(1)} vs 10% · ${
+                focusGap === null ? "absent" : `${focusGap} ticks ago`
+              }`}
         </p>
       </div>
 
@@ -219,7 +259,7 @@ export function AnalyzerPopup({
             })
           }
         >
-          Feed digit to bot
+          {ouDesk ? "Feed barrier to bot" : "Feed digit to bot"}
         </button>
       </div>
 
