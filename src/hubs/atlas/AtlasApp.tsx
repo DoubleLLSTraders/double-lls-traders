@@ -996,7 +996,7 @@ export function AtlasApp({
     if (force || currentDead || (classic && !classicLockRef.current)) {
       shouldSwitch =
         pick.symbol !== curSym || pick.strategyId !== curStrat;
-    } else if (pick.tradeable && pick.bias !== "neutral") {
+    } else if (pick.tradeable && (pick.bias === "buy" || pick.bias === "sell")) {
       if (!currentReady) {
         shouldSwitch =
           pick.symbol !== curSym || pick.strategyId !== curStrat;
@@ -1041,7 +1041,7 @@ export function AtlasApp({
     );
   }
 
-  function placeTrade(opts?: { soft?: boolean }) {
+  function placeTrade(_opts?: { soft?: boolean }) {
     if (!signal || signal.bias === "neutral" || !riskVerdict?.ok) {
       return;
     }

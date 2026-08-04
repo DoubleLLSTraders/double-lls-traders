@@ -279,14 +279,16 @@ export class DerivClient {
 
     try {
       if (this.options.transport === "oauth" && this.options.token) {
-        const auth = await this.dispatch<{
-          authorize?: {
-            loginid?: string;
-            balance?: number;
-            currency?: string;
-            is_virtual?: number | boolean;
-          };
-        }>({ authorize: this.options.token });
+        const auth = await this.dispatch<
+          BaseResponse & {
+            authorize?: {
+              loginid?: string;
+              balance?: number;
+              currency?: string;
+              is_virtual?: number | boolean;
+            };
+          }
+        >({ authorize: this.options.token });
         const a = auth.authorize;
         if (a) {
           this.account = {

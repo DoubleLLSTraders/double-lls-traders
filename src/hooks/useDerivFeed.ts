@@ -284,27 +284,25 @@ export function useDerivFeed(symbol: string, historyCount = 1000): DerivFeed {
           setBalance(nextClient.account.balance);
         }
 
-        if (credentials.transport !== "public") {
-          const stopBalance = await nextClient.subscribe<BalanceResponse>(
-            { balance: 1 },
-            (message) => {
-              if (cancelled) return;
-              setError(null);
-              setBalance(message.balance.balance);
-              setAccount((previous) =>
-                previous
-                  ? {
-                      ...previous,
-                      balance: message.balance.balance,
-                      currency: message.balance.currency,
-                      accountId: message.balance.loginid || previous.accountId,
-                    }
-                  : previous,
-              );
-            },
-          );
-          cleanups.push(stopBalance);
-        }
+        const stopBalance = await nextClient.subscribe<BalanceResponse>(
+          { balance: 1 },
+          (message) => {
+            if (cancelled) return;
+            setError(null);
+            setBalance(message.balance.balance);
+            setAccount((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    balance: message.balance.balance,
+                    currency: message.balance.currency,
+                    accountId: message.balance.loginid || previous.accountId,
+                  }
+                : previous,
+            );
+          },
+        );
+        cleanups.push(stopBalance);
       } catch (connectError) {
         if (cancelled) return;
         setState("error");

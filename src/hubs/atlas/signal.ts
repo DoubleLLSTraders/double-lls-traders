@@ -663,7 +663,7 @@ export function buildAtlasSignal(
     ? `${stratMeta.name.toUpperCase()} ${displayBias.toUpperCase()} · ${powerLabel} · timed entry · stack OK · confluence ${confluence.toFixed(0)}% · conf ${confidence.toFixed(0)} · ${factorLine}. Target ${rrMultiple.toFixed(1)}R.`
     : chasing
       ? `${stratMeta.name} HOLD · ${rawBias.toUpperCase()} looks extended — analyzer wants a pullback/tag, not chasing the dump.`
-      : !timingOk && rawBias !== "neutral"
+      : !timingOk && (rawBias === "buy" || rawBias === "sell")
         ? `${stratMeta.name} HOLD · candle timing fights ${rawBias.toUpperCase()} — waiting for agreeing bar.`
       : againstStack
       ? `${stratMeta.name} BLOCKED · ${rawBias.toUpperCase()} lean fights EMA stack (EMA20 ${trendSide === "buy" ? ">" : "<"} EMA50). Real-market rule: no counter-trend entries.`

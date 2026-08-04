@@ -53,13 +53,9 @@ import {
   isMomentumHoldable,
   MOMENTUM_COMMIT_MAX_LOSSES,
   MOMENTUM_COMMIT_RUNS,
-  MOMENTUM_MIN_CHANCE_EDGE_PP,
   MOMENTUM_MIN_DEEP_EDGE_PP,
-  MOMENTUM_MIN_EDGE_PP,
   MOMENTUM_MIN_MICRO_EDGE_PP,
   MOMENTUM_MIN_STREAK,
-  MOMENTUM_MIN_TILT_PP,
-  MOMENTUM_RECOVERY_MIN_STREAK,
   pickBetterOverUnder,
   rankMomentumBoard,
   rankSafePairByChance,
@@ -1912,6 +1908,7 @@ export default function App({
       armedEpoch: null,
       label: "Watch",
       detail: "",
+      entryGap: null,
     };
     setAnalyzerDirective(null);
   }, [symbol]);
@@ -2025,6 +2022,7 @@ export default function App({
         armedEpoch: null,
         label: "Watch",
         detail: "",
+        entryGap: null,
       };
       setAnalyzerDirective(null);
 
@@ -2507,7 +2505,7 @@ export default function App({
   openContractRef.current =
     paper.session.open && isOverUnderSide(paper.session.open.side)
       ? {
-          side: paper.session.open.side,
+          side: paper.session.open.side as OverUnderSide,
           digit: paper.session.open.digit,
         }
       : null;
@@ -2689,6 +2687,7 @@ export default function App({
           armedEpoch: null,
           label: "Watch",
           detail: "",
+          entryGap: null,
         };
         setBot((current) =>
           withContractMoneyLimits(
@@ -2714,6 +2713,7 @@ export default function App({
           armedEpoch: null,
           label: "Watch",
           detail: "",
+          entryGap: null,
         };
         setBot((current) => ({
           ...applyDiffersFastProfile(current),
@@ -2860,6 +2860,7 @@ export default function App({
       armedEpoch: null,
       label: "Settling",
       detail: "Relax on market · reading tape…",
+      entryGap: null,
     };
   }, [symbol]);
 
@@ -3057,7 +3058,7 @@ export default function App({
 
       // Promising but not firm — don't park past ~16s on OU.
       if (promising) {
-        if (ouRunning && marketAge >= OU_PROMISING_MAX_MS) {
+        if (ouDesk && marketAge >= OU_PROMISING_MAX_MS) {
           void hopNextVolatility("Hunting · Almost stalled · next market", true);
           return;
         }

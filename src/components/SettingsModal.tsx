@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useOptionalAppAuth } from "../context/AuthContext";
+import type { AppAuth } from "../hooks/useAppAuth";
 import { accountCredentials, getAccountKind, setAccountKind } from "../lib/accountMode";
 import {
   AUTH_LOCKOUT_MS,
@@ -189,7 +190,7 @@ export function SettingsModal({
   const lockout = useMemo(() => {
     if (!auth?.session?.email) return null;
     return isAuthLocked(auth.session.email);
-  }, [auth.session?.email, now]);
+  }, [auth?.session?.email, now]);
 
   if (!open) return null;
 
@@ -377,7 +378,7 @@ function ProfilePanel({
   session,
   sessionRemaining,
 }: {
-  session: ReturnType<typeof useAppAuth>["session"];
+  session: AppAuth["session"];
   sessionRemaining: number | null;
 }) {
   if (!session) {
@@ -462,7 +463,7 @@ function SecurityPanel({
 }: {
   email: string | null;
   name: string | null;
-  session: ReturnType<typeof useAppAuth>["session"];
+  session: AppAuth["session"];
   sessionRemaining: number | null;
   totpEnabled: boolean;
   recoveryConfigured: boolean;
