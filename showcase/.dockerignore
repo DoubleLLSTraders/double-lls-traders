@@ -1,0 +1,10 @@
+node_modules
+dist
+data
+scripts
+public
+.netlify
+.env
+.env.*
+*.png
+__pycache__
