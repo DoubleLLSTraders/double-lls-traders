@@ -91,6 +91,15 @@ export async function freshIdToken() {
   return { token: await user.getIdToken(true), verified: user.emailVerified };
 }
 
+/** Cheap check for polling: reloads the Firebase user without minting a new ID token. */
+export async function isEmailVerified() {
+  await auth.authStateReady();
+  const user = auth.currentUser;
+  if (!user) return false;
+  await user.reload();
+  return user.emailVerified;
+}
+
 export async function resendVerification() {
   await auth.authStateReady();
   if (!auth.currentUser) throw new Error("Sign out and sign in again, and we will send you a fresh link.");

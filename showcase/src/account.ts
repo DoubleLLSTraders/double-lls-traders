@@ -202,6 +202,9 @@ export const sendPasswordReset = (email: string) => fb((m) => m.sendReset(email.
 
 export const resendVerification = () => fb((m) => m.resendVerification());
 
+/** Firebase-only check; once it says yes, call refreshVerification to record it on the account. */
+export const emailVerifiedYet = () => fb((m) => m.isEmailVerified());
+
 /** Re-reads the email-verified flag from Firebase and stores it on the account. */
 export async function refreshVerification() {
   const account = loadAccount();

@@ -1582,6 +1582,11 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .acct-verify strong { color: var(--text); font-weight: 500; font-size: 14px; }
 .acct-verify em { font-style: normal; color: var(--amber); font-size: 12.5px; }
 .acct-verify-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.acct-verify-wait { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-3); }
+.acct-verify-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); animation: acct-pulse 1.4s ease-in-out infinite; }
+.acct-verify.done { background: rgba(76, 195, 138, 0.08); border-color: rgba(76, 195, 138, 0.32); animation: acct-in 0.3s ease-out; }
+.acct-verify.done strong { color: rgb(76, 195, 138); }
+@media (prefers-reduced-motion: reduce) { .acct-verify-dot, .acct-verify.done { animation: none; } }
 .acct-security { display: grid; gap: 12px; }
 .acct-security .co-field { margin: 0; }
 .acct-security-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

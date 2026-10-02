@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CloudBotCard } from "./CloudBotCard";
 import {
   changePassword,
   deleteAccount,
   refreshAccount,
+  emailVerifiedYet,
   refreshVerification,
   resendVerification,
   sendPasswordReset,
@@ -189,6 +190,11 @@ function AuthForm({ forPurchase }: { forPurchase?: boolean }) {
 }
 
 const RESEND_WAIT_S = 60;
+const VERIFY_POLL_MS = 5_000;
+/** After this long the banner checks less often, in case the tab is left open for hours. */
+const VERIFY_FAST_FOR_MS = 10 * 60_000;
+const VERIFY_SLOW_POLL_MS = 30_000;
+const VERIFIED_NOTICE_MS = 8_000;
 
 function VerifyBanner({ email }: { email: string }) {
   const [busy, setBusy] = useState(false);
@@ -196,13 +202,32 @@ function VerifyBanner({ email }: { email: string }) {
   const [note, setNote] = useState<string | null>(null);
 
   useEffect(() => {
-    const check = () => document.visibilityState === "visible" && void refreshVerification().catch(() => {});
-    check();
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", check);
+    const started = Date.now();
+    let checking = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const check = async () => {
+      if (checking || document.visibilityState !== "visible") return;
+      checking = true;
+      try {
+        if (await emailVerifiedYet()) await refreshVerification();
+      } catch {
+        /* offline or signed out of Firebase; the buttons still work */
+      } finally {
+        checking = false;
+      }
+    };
+    const loop = () => {
+      void check();
+      timer = setTimeout(loop, Date.now() - started < VERIFY_FAST_FOR_MS ? VERIFY_POLL_MS : VERIFY_SLOW_POLL_MS);
+    };
+    const onFocus = () => void check();
+    loop();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     return () => {
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", check);
+      clearTimeout(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
     };
   }, []);
 
@@ -242,7 +267,8 @@ function VerifyBanner({ email }: { email: string }) {
     <div className="acct-verify" role="status">
       <div>
         <strong>Verify your email</strong>
-        <span>We sent a link to {email}. Open it to confirm this address is yours.</span>
+        <span>We sent a link to {email}. Open it and this page updates by itself.</span>
+        <span className="acct-verify-wait"><i className="acct-verify-dot" aria-hidden="true" />Waiting for you to click the link</span>
         {note && <em>{note}</em>}
       </div>
       <div className="acct-verify-actions">
@@ -328,6 +354,18 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
   const sync = useSyncStatus();
   const [busy, setBusy] = useState(false);
   const [licences, setLicences] = useState<AccountLicence[]>([]);
+  const [justVerified, setJustVerified] = useState(false);
+  const wasVerified = useRef(account.emailVerified);
+
+  useEffect(() => {
+    if (account.emailVerified && !wasVerified.current) {
+      wasVerified.current = true;
+      setJustVerified(true);
+      const id = setTimeout(() => setJustVerified(false), VERIFIED_NOTICE_MS);
+      return () => clearTimeout(id);
+    }
+    wasVerified.current = account.emailVerified;
+  }, [account.emailVerified]);
 
   useEffect(() => {
     void refreshAccount()
@@ -369,6 +407,14 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
       </header>
 
       {!account.emailVerified && <VerifyBanner email={account.email} />}
+      {justVerified && (
+        <div className="acct-verify done" role="status">
+          <div>
+            <strong>Email verified</strong>
+            <span>Thanks, {account.email} is confirmed. Everything on your account is unlocked, including the cloud bot.</span>
+          </div>
+        </div>
+      )}
 
       <div className="acct-stats">
         <div><small>Saved sessions</small><b>{history.length}</b></div>
