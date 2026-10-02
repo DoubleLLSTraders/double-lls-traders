@@ -16,7 +16,7 @@ export const EXPORTS: { format: ExportFormat; label: string; hint: string; runsO
   {
     format: "dbot-xml",
     label: "Deriv Bot file (.xml)",
-    hint: "No code. Import at dbot.deriv.com and press Run. Differs strategy with take profit / stop loss.",
+    hint: "No code. Import at bot.deriv.com and press Run. Differs strategy with take profit / stop loss.",
     runsOn: "Any browser: Android, iPhone, tablet, Windows, Mac",
   },
   {
@@ -81,6 +81,12 @@ const PAYOUTS = {
   DIGITUNDER: UNDER_PAYOUT,
 };
 
+/** The site's registered Deriv app; buyers can override it with DERIV_APP_ID. */
+const DERIV_APP_ID = "33YJbCdyVl2HOx6qFLInQ";
+const DERIV_REST_URL = "https://api.derivws.com";
+/** Spliced into double-quoted strings in the generated bots, so it must not contain double quotes. */
+const TOKEN_HELP = "Create a personal access token with Trade scope at https://home.deriv.com (Account settings > API token).";
+
 const RISK_NOTE =
   "Trading is risky and you can lose your stake. Simulated or past results do not guarantee future profit. Test on a DEMO account first.";
 
@@ -116,8 +122,8 @@ function buildJavaScript(s: BotSettings, meta: ExportMeta): string {
  *   Windows PowerShell:  $env:DERIV_TOKEN="your_token"; node ${FILE_BASE}.mjs
  *   macOS / Linux:       DERIV_TOKEN=your_token node ${FILE_BASE}.mjs
  *
- * Create a token at https://app.deriv.com/account/api-token with "Trade" scope.
- * The bot refuses REAL accounts unless you also set ALLOW_REAL=1.
+ * ${TOKEN_HELP}
+ * The bot trades your DEMO account. Set ALLOW_REAL=1 to trade your REAL account instead.
  * CONFIG.mode: "auto" | "differs" | "matches" | "overunder" | "evenodd".
  */
 const CONFIG = ${cfg};
@@ -126,12 +132,13 @@ const CONFIG = ${cfg};
 const PAYOUTS = ${payouts};
 
 const NAMES = { DIGITMATCH: "Matches", DIGITDIFF: "Differs", DIGITOVER: "Over", DIGITUNDER: "Under", DIGITEVEN: "Even", DIGITODD: "Odd" };
-const APP_ID = process.env.DERIV_APP_ID || "1089";
-const TOKEN = process.env.DERIV_TOKEN;
+const APP_ID = process.env.DERIV_APP_ID || ${JSON.stringify(DERIV_APP_ID)};
+const REST_URL = (process.env.DERIV_REST_URL || ${JSON.stringify(DERIV_REST_URL)}).replace(/\\/$/, "");
+const TOKEN = (process.env.DERIV_TOKEN || "").trim();
 const ALLOW_REAL = process.env.ALLOW_REAL === "1";
 
 if (!TOKEN) {
-  console.error("Set DERIV_TOKEN to a Deriv API token with Trade scope.");
+  console.error("Set DERIV_TOKEN first. ${TOKEN_HELP}");
   process.exit(1);
 }
 
@@ -329,7 +336,7 @@ function canRecover(lossSoFar, s) {
   return lossSoFar + next <= budget;
 }
 
-const ws = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=" + APP_ID);
+let ws = null;
 let currency = "USD";
 /* Open positions by symbol; turbo holds one per index at once, otherwise one in total. */
 const positions = new Map();
@@ -339,8 +346,18 @@ let pnl = 0;
 let trades = 0;
 let wonCount = 0;
 let lossStreak = 0;
+let account = null;
+let stopped = false;
+let retryMs = 2000;
+let pingTimer = null;
+/* After Deriv refuses a buy, wait a moment rather than retrying on every tick. */
+let buyPauseUntil = 0;
+/* Buys awaiting Deriv's answer, by request id. */
+const pendingBuys = new Map();
+let reqSeq = 0;
+const HISTORY_TICKS = Math.min(3000, Math.max(1000, CONFIG.window + 50));
 
-const send = (msg) => ws.send(JSON.stringify(msg));
+const send = (msg) => ws && ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(msg));
 
 function lastDigit(quote, pipSize) {
   const text = Number(quote).toFixed(pipSize);
@@ -349,36 +366,113 @@ function lastDigit(quote, pipSize) {
 
 function stop(reason) {
   console.log("Stopped: " + reason + " | trades " + trades + " | P/L " + pnl.toFixed(2) + " " + currency);
-  ws.close();
+  stopped = true;
+  if (ws) ws.close();
+  else process.exit(0);
 }
 
-ws.addEventListener("open", () => {
-  send({ authorize: TOKEN });
-  setInterval(() => send({ ping: 1 }), 30000);
-});
+async function derivRest(path, method = "GET") {
+  const res = await fetch(REST_URL + path, {
+    method,
+    headers: { Authorization: "Bearer " + TOKEN, "Deriv-App-ID": APP_ID, Accept: "application/json" },
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await res.text().catch(() => "");
+  let body = {};
+  try { body = JSON.parse(text); } catch { body = { message: text.trim().slice(0, 200) }; }
+  if (res.ok) return body;
+  const raw = body.message || body.error?.message || body.errors?.[0]?.message || body.error;
+  const detail = typeof raw === "string" && raw ? raw : "HTTP " + res.status;
+  const err = new Error(res.status === 401 || res.status === 403 ? "Deriv refused the token (" + detail + "). ${TOKEN_HELP}" : detail);
+  err.fatal = res.status >= 400 && res.status < 500 && res.status !== 429;
+  throw err;
+}
 
-ws.addEventListener("message", (event) => {
+/* Your DEMO account, or the REAL one when ALLOW_REAL=1. */
+async function pickAccount() {
+  const { data = [] } = await derivRest("/trading/v1/options/accounts");
+  const demo = data.find((a) => a.account_type === "demo");
+  const real = data.find((a) => a.account_type !== "demo");
+  const chosen = ALLOW_REAL ? real : demo;
+  if (chosen) return chosen;
+  const err = new Error(
+    !data.length ? "This token cannot see any Deriv accounts."
+      : ALLOW_REAL ? "ALLOW_REAL=1 is set but this token has no real account."
+      : "This token only has a REAL account. Set ALLOW_REAL=1 only if you accept real-money risk.",
+  );
+  err.fatal = true;
+  throw err;
+}
+
+/* Every (re)connect asks Deriv for a fresh one-time socket address, since each expires within moments. */
+async function connect() {
+  if (stopped) return;
+  let url;
+  try {
+    if (!account) {
+      account = await pickAccount();
+      currency = account.currency || "USD";
+      balance = Number(account.balance);
+      startBalance = balance;
+      console.log("Logged in to " + account.account_id + " (" + (account.account_type === "demo" ? "demo" : "REAL") + "), balance " + balance.toFixed(2) + " " + currency);
+    }
+    const otp = await derivRest("/trading/v1/options/accounts/" + encodeURIComponent(account.account_id) + "/otp", "POST");
+    url = otp.data?.url;
+    if (!url) throw new Error("Deriv did not return a socket address");
+  } catch (err) {
+    if (err.fatal) {
+      console.error(err.message);
+      process.exit(1);
+    }
+    console.error("Cannot reach Deriv (" + err.message + "), retrying in " + retryMs / 1000 + "s...");
+    setTimeout(connect, retryMs);
+    retryMs = Math.min(60000, retryMs * 2);
+    return;
+  }
+  ws = new WebSocket(url);
+  ws.addEventListener("open", onOpen);
+  ws.addEventListener("message", onMessage);
+  ws.addEventListener("close", () => {
+    clearInterval(pingTimer);
+    if (stopped) process.exit(0);
+    console.log("Connection lost, reconnecting...");
+    setTimeout(connect, retryMs);
+  });
+}
+
+function onOpen() {
+  retryMs = 2000;
+  pingTimer = setInterval(() => send({ ping: 1 }), 30000);
+  /* Contracts bought before a reconnect are followed again; buys that never got an answer are dropped. */
+  pendingBuys.clear();
+  for (const [sym, pos] of positions) {
+    if (pos.contractId) send({ proposal_open_contract: 1, contract_id: pos.contractId, subscribe: 1 });
+    else positions.delete(sym);
+  }
+  console.log("Mode " + CONFIG.mode + ". Loading the last " + HISTORY_TICKS + " ticks on " + SYMBOLS.join(", ") + "...");
+  for (const sym of SYMBOLS) send({ ticks_history: sym, end: "latest", count: HISTORY_TICKS, style: "ticks", subscribe: 1 });
+}
+
+function onMessage(event) {
   const msg = JSON.parse(event.data);
   if (msg.error) {
     console.error("Deriv error (" + msg.msg_type + "): " + msg.error.message);
-    if (msg.msg_type === "authorize") process.exit(1);
-    if (msg.msg_type === "buy") positions.delete(msg.echo_req?.passthrough?.symbol);
+    if (msg.msg_type === "buy") {
+      positions.delete(pendingBuys.get(msg.req_id));
+      pendingBuys.delete(msg.req_id);
+      buyPauseUntil = Date.now() + 3000;
+      if (/insufficient|balance/i.test(msg.error.message || "")) stop("Deriv balance too low for the stake");
+    }
     return;
   }
 
   switch (msg.msg_type) {
-    case "authorize": {
-      const a = msg.authorize;
-      currency = a.currency || "USD";
-      balance = Number(a.balance);
-      startBalance = balance;
-      if (!a.is_virtual && !ALLOW_REAL) {
-        console.error("This token is for a REAL account. Set ALLOW_REAL=1 only if you accept real-money risk.");
-        process.exit(1);
-      }
-      console.log("Logged in to " + a.loginid + " (" + (a.is_virtual ? "demo" : "REAL") + "), balance " + a.balance + " " + currency);
-      console.log("Mode " + CONFIG.mode + ". Warming up: collecting " + CONFIG.window + " ticks on " + SYMBOLS.join(", ") + "...");
-      for (const sym of SYMBOLS) send({ ticks: sym, subscribe: 1 });
+    case "history": {
+      const book = books.get(msg.echo_req?.ticks_history);
+      if (!book) return;
+      book.digits = (msg.history?.prices || []).map((q) => lastDigit(q, msg.pip_size ?? 2));
+      book.streak.clear();
+      console.log(msg.echo_req.ticks_history + ": " + book.digits.length + " ticks loaded, scanning live.");
       break;
     }
     case "tick": {
@@ -389,7 +483,7 @@ ws.addEventListener("message", (event) => {
       if (book.digits.length > 3000) book.digits.shift();
       tickCount++;
       const s = (book.pick = pickSetup(book, recoveryLoss > 0));
-      if (!s || (CONFIG.turbo ? positions.has(sym) : positions.size > 0 || tickCount < cooldownUntil)) return;
+      if (stopped || !s || Date.now() < buyPauseUntil || (CONFIG.turbo ? positions.has(sym) : positions.size > 0 || tickCount < cooldownUntil)) return;
       if (!CONFIG.turbo) for (const other of books.values()) if (other.pick && other.pick.z > s.z) return;
       if (dayLimitHit()) {
         if (!dayPaused) console.log("Daily loss limit reached: no new trades until 00:00 UTC.");
@@ -410,14 +504,17 @@ ws.addEventListener("message", (event) => {
         currency,
         duration: 1,
         duration_unit: "t",
-        symbol: sym,
+        underlying_symbol: sym,
       };
       if (s.barrier !== null) parameters.barrier = String(s.barrier);
-      send({ buy: 1, price: stake, parameters, passthrough: { symbol: sym } });
+      const reqId = ++reqSeq;
+      pendingBuys.set(reqId, sym);
+      send({ buy: 1, price: stake, parameters, req_id: reqId });
       break;
     }
     case "buy": {
-      const pos = positions.get(msg.echo_req?.passthrough?.symbol);
+      const pos = positions.get(pendingBuys.get(msg.req_id));
+      pendingBuys.delete(msg.req_id);
       if (!pos) return;
       pos.contractId = msg.buy.contract_id;
       send({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1 });
@@ -463,9 +560,9 @@ ws.addEventListener("message", (event) => {
       break;
     }
   }
-});
+}
 
-ws.addEventListener("close", () => process.exit(0));
+connect();
 `;
 }
 
@@ -483,8 +580,8 @@ Run (Python 3.10+):
     Windows PowerShell:  $env:DERIV_TOKEN="your_token"; python ${FILE_BASE}.py
     macOS / Linux:       DERIV_TOKEN=your_token python ${FILE_BASE}.py
 
-Create a token at https://app.deriv.com/account/api-token with "Trade" scope.
-The bot refuses REAL accounts unless you also set ALLOW_REAL=1.
+${TOKEN_HELP}
+The bot trades your DEMO account. Set ALLOW_REAL=1 to trade your REAL account instead.
 CONFIG["mode"]: "auto" | "differs" | "matches" | "overunder" | "evenodd".
 """
 import asyncio
@@ -493,6 +590,7 @@ import math
 import os
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -505,8 +603,10 @@ PAYOUTS = json.loads(r"""${payouts}""")
 
 NAMES = {"DIGITMATCH": "Matches", "DIGITDIFF": "Differs", "DIGITOVER": "Over",
          "DIGITUNDER": "Under", "DIGITEVEN": "Even", "DIGITODD": "Odd"}
-APP_ID = os.environ.get("DERIV_APP_ID", "1089")
-TOKEN = os.environ.get("DERIV_TOKEN")
+APP_ID = os.environ.get("DERIV_APP_ID") or ${JSON.stringify(DERIV_APP_ID)}
+REST_URL = (os.environ.get("DERIV_REST_URL") or ${JSON.stringify(DERIV_REST_URL)}).rstrip("/")
+TOKEN = (os.environ.get("DERIV_TOKEN") or "").strip()
+TOKEN_HELP = ${JSON.stringify(TOKEN_HELP)}
 ALLOW_REAL = os.environ.get("ALLOW_REAL") == "1"
 
 BOT_VERSION = ${JSON.stringify(meta.version)}
@@ -653,194 +753,296 @@ def pick_setup(digits: list[int], streak: dict[str, int], recovering: bool) -> t
     return best or (fallback if CONFIG.get("turbo") else None)
 
 
+class DerivRefused(Exception):
+    """A refusal Deriv repeats on every retry (bad token, wrong account), as opposed to a network blip."""
+
+
+def deriv_rest(path: str, method: str = "GET") -> dict:
+    req = urllib.request.Request(
+        REST_URL + path,
+        data=b"" if method == "POST" else None,
+        method=method,
+        headers={"Authorization": f"Bearer {TOKEN}", "Deriv-App-ID": APP_ID, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return json.loads(res.read().decode() or "{}")
+    except urllib.error.HTTPError as err:
+        text = err.read().decode(errors="replace")
+        try:
+            body = json.loads(text or "{}")
+        except Exception:
+            body = {"message": text.strip()[:200]}
+        if not isinstance(body, dict):
+            body = {"message": str(body)}
+        detail = body.get("message") or body.get("error") or f"HTTP {err.code}"
+        if isinstance(detail, dict):
+            detail = detail.get("message") or f"HTTP {err.code}"
+        if err.code in (401, 403):
+            detail = f"Deriv refused the token ({detail}). {TOKEN_HELP}"
+        if 400 <= err.code < 500 and err.code != 429:
+            raise DerivRefused(detail) from None
+        raise RuntimeError(detail) from None
+
+
+def pick_account() -> dict:
+    """Your DEMO account, or the REAL one when ALLOW_REAL=1."""
+    data = deriv_rest("/trading/v1/options/accounts").get("data") or []
+    demo = next((a for a in data if a.get("account_type") == "demo"), None)
+    real = next((a for a in data if a.get("account_type") != "demo"), None)
+    chosen = real if ALLOW_REAL else demo
+    if chosen:
+        return chosen
+    if not data:
+        raise DerivRefused("This token cannot see any Deriv accounts.")
+    if ALLOW_REAL:
+        raise DerivRefused("ALLOW_REAL=1 is set but this token has no real account.")
+    raise DerivRefused("This token only has a REAL account. Set ALLOW_REAL=1 only if you accept real-money risk.")
+
+
 async def main() -> None:
     if not TOKEN:
-        sys.exit("Set DERIV_TOKEN to a Deriv API token with Trade scope.")
-    asyncio.get_running_loop().run_in_executor(None, check_for_update)
+        sys.exit(f"Set DERIV_TOKEN first. {TOKEN_HELP}")
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, check_for_update)
 
-    url = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
-    async with websockets.connect(url) as ws:
-        async def send(msg: dict) -> None:
-            await ws.send(json.dumps(msg))
+    ws = None
 
-        # Per index: recent last digits, consecutive ticks each setup has qualified for, and its latest pick.
-        books = {sym: {"digits": [], "streak": {}, "pick": None} for sym in SYMBOLS}
-        currency = "USD"
-        positions: dict[str, dict] = {}  # open positions by symbol; turbo holds one per index at once
-        tick_count = cooldown_until = trades = won = loss_streak = 0
-        pnl = balance = recovery_loss = start_balance = peak_pnl = day_pnl = 0.0
-        recovery_step = 0
-        day_key = time.strftime("%Y-%m-%d", time.gmtime())
-        day_paused = False
+    async def send(msg: dict) -> None:
+        await ws.send(json.dumps(msg))
 
-        def braked() -> bool:
-            # Down drawdownBrake % of the starting balance from the session peak: stakes halve and recovery pauses.
-            limit = CONFIG.get("drawdownBrake", 0)
-            return limit > 0 and peak_pnl - pnl >= start_balance * limit / 100
+    # Per index: recent last digits, consecutive ticks each setup has qualified for, and its latest pick.
+    books = {sym: {"digits": [], "streak": {}, "pick": None} for sym in SYMBOLS}
+    currency = "USD"
+    positions: dict[str, dict] = {}  # open positions by symbol; turbo holds one per index at once
+    tick_count = cooldown_until = trades = won = loss_streak = 0
+    pnl = balance = recovery_loss = start_balance = peak_pnl = day_pnl = 0.0
+    recovery_step = 0
+    day_key = time.strftime("%Y-%m-%d", time.gmtime())
+    day_paused = False
+    history_ticks = min(3000, max(1000, CONFIG["window"] + 50))
+    retry_s = 2
+    buy_pause_until = 0.0  # after Deriv refuses a buy, wait a moment rather than retrying on every tick
+    pending_buys: dict[int, str] = {}  # buys awaiting Deriv's answer, by request id
+    req_seq = 0
 
-        def kelly_stake(edge_p: float, contract: str, barrier: int | None) -> float:
-            # Fractional Kelly on half the measured edge over break-even, since short-window win rates overstate it.
-            b = payout(contract, barrier) - 1
-            return max(0.0, balance * CONFIG.get("kellyFraction", 0.1) * (edge_p - (1 - edge_p) / b))
+    def braked() -> bool:
+        # Down drawdownBrake % of the starting balance from the session peak: stakes halve and recovery pauses.
+        limit = CONFIG.get("drawdownBrake", 0)
+        return limit > 0 and peak_pnl - pnl >= start_balance * limit / 100
 
-        def roll_day() -> None:
-            # Losses since 00:00 UTC; at dailyLossLimit the bot stops buying until the next UTC day.
-            nonlocal day_key, day_pnl
-            today = time.strftime("%Y-%m-%d", time.gmtime())
-            if today != day_key:
-                day_key, day_pnl = today, 0.0
+    def kelly_stake(edge_p: float, contract: str, barrier: int | None) -> float:
+        # Fractional Kelly on half the measured edge over break-even, since short-window win rates overstate it.
+        b = payout(contract, barrier) - 1
+        return max(0.0, balance * CONFIG.get("kellyFraction", 0.1) * (edge_p - (1 - edge_p) / b))
 
-        def recovery_stake(owed: float, contract: str, barrier: int | None) -> float:
-            # A losing streak is paid back over RECOVERY_SPLIT wins, so recovery stakes stay small.
-            return owed / ((payout(contract, barrier) - 1) * ${RECOVERY_SPLIT}) + CONFIG["stake"]
+    def roll_day() -> None:
+        # Losses since 00:00 UTC; at dailyLossLimit the bot stops buying until the next UTC day.
+        nonlocal day_key, day_pnl
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        if today != day_key:
+            day_key, day_pnl = today, 0.0
 
-        def stake_for(contract: str, barrier: int | None) -> float:
-            if not CONFIG["martingale"] or CONFIG.get("turbo") or recovery_loss <= 0:
-                return CONFIG["stake"]
-            return round(max(CONFIG["stake"], min(recovery_stake(recovery_loss, contract, barrier), stake_cap())), 2)
+    def recovery_stake(owed: float, contract: str, barrier: int | None) -> float:
+        # A losing streak is paid back over RECOVERY_SPLIT wins, so recovery stakes stay small.
+        return owed / ((payout(contract, barrier) - 1) * ${RECOVERY_SPLIT}) + CONFIG["stake"]
 
-        def stake_cap() -> float:
-            percent = ${AUTO_STAKE_CAP_PERCENT} if CONFIG.get("autoMartingale") else CONFIG["maxStakePercent"]
-            return balance * percent / 100 if percent > 0 else math.inf
+    def stake_for(contract: str, barrier: int | None) -> float:
+        if not CONFIG["martingale"] or CONFIG.get("turbo") or recovery_loss <= 0:
+            return CONFIG["stake"]
+        return round(max(CONFIG["stake"], min(recovery_stake(recovery_loss, contract, barrier), stake_cap())), 2)
 
-        def can_recover(loss_so_far: float, contract: str, barrier: int | None) -> bool:
-            # Auto mode keeps a recovery streak within ${AUTO_LADDER_BUDGET_PERCENT}% of balance and the room left before the stop loss.
+    def stake_cap() -> float:
+        percent = ${AUTO_STAKE_CAP_PERCENT} if CONFIG.get("autoMartingale") else CONFIG["maxStakePercent"]
+        return balance * percent / 100 if percent > 0 else math.inf
+
+    def can_recover(loss_so_far: float, contract: str, barrier: int | None) -> bool:
+        # Auto mode keeps a recovery streak within ${AUTO_LADDER_BUDGET_PERCENT}% of balance and the room left before the stop loss.
+        if braked():
+            return False
+        if not CONFIG.get("autoMartingale"):
+            return recovery_step < CONFIG["maxMartingaleSteps"]
+        if recovery_step >= ${AUTO_MAX_STEPS}:
+            return False
+        nxt = min(recovery_stake(loss_so_far, contract, barrier), stake_cap())
+        budget = balance * ${AUTO_LADDER_BUDGET_PERCENT} / 100
+        if CONFIG["stopLoss"] > 0:
+            budget = min(budget, CONFIG["stopLoss"] + pnl)
+        return loss_so_far + nxt <= budget
+
+    async def on_message(raw: str) -> bool:
+        """Handles one Deriv message; True once the session has stopped itself."""
+        nonlocal currency, balance, start_balance, tick_count, cooldown_until, trades, won, loss_streak
+        nonlocal pnl, recovery_loss, recovery_step, peak_pnl, day_pnl, day_paused, buy_pause_until, req_seq
+        msg = json.loads(raw)
+        kind = msg.get("msg_type")
+        if "error" in msg:
+            text = msg["error"].get("message", "")
+            print(f"Deriv error ({kind}): {text}")
+            if kind == "buy":
+                positions.pop(pending_buys.pop(msg.get("req_id"), None), None)
+                buy_pause_until = time.monotonic() + 3
+                if "insufficient" in text.lower() or "balance" in text.lower():
+                    print(f"Stopped: Deriv balance too low for the stake | trades {trades} | P/L {pnl:.2f} {currency}")
+                    return True
+            return False
+
+        if kind == "history":
+            sym = (msg.get("echo_req") or {}).get("ticks_history")
+            book = books.get(sym)
+            if book is not None:
+                pip = msg.get("pip_size", 2)
+                book["digits"] = [last_digit(q, pip) for q in (msg.get("history") or {}).get("prices") or []]
+                book["streak"].clear()
+                print(f"{sym}: {len(book['digits'])} ticks loaded, scanning live.")
+
+        elif kind == "tick":
+            sym = msg["tick"]["symbol"]
+            book = books.get(sym)
+            if book is None:
+                return False
+            book["digits"].append(last_digit(msg["tick"]["quote"], msg["tick"]["pip_size"]))
+            del book["digits"][:-3000]
+            tick_count += 1
+            setup = book["pick"] = pick_setup(book["digits"], book["streak"], recovery_loss > 0)
+            if setup is None or time.monotonic() < buy_pause_until:
+                return False
+            if CONFIG.get("turbo"):
+                if sym in positions:
+                    return False
+            elif positions or tick_count < cooldown_until or any(b["pick"] and b["pick"][2] > setup[2] for b in books.values()):
+                return False
+            roll_day()
+            if CONFIG.get("dailyLossLimit", 0) > 0 and day_pnl <= -CONFIG["dailyLossLimit"]:
+                if not day_paused:
+                    print("Daily loss limit reached: no new trades until 00:00 UTC.")
+                day_paused = True
+                return False
+            day_paused = False
+            contract, barrier, z, edge_p = setup
+            units = units_for(z, recovery_loss > 0, braked())
+            stake = stake_for(contract, barrier)
+            if CONFIG.get("kellySizing") and recovery_loss <= 0:
+                stake = round(max(${MIN_STAKE}, min(kelly_stake(edge_p, contract, barrier), stake_cap())), 2)
             if braked():
+                stake = round(max(${MIN_STAKE}, stake / 2), 2)
+            if units > 1:
+                stake = round(max(stake, min(stake * units, stake_cap())), 2)
+            positions[sym] = {"contract": contract, "barrier": barrier, "stake": stake, "symbol": sym, "units": units}
+            parameters = {
+                "amount": stake,
+                "basis": "stake",
+                "contract_type": contract,
+                "currency": currency,
+                "duration": 1,
+                "duration_unit": "t",
+                "underlying_symbol": sym,
+            }
+            if barrier is not None:
+                parameters["barrier"] = str(barrier)
+            req_seq += 1
+            pending_buys[req_seq] = sym
+            await send({"buy": 1, "price": stake, "parameters": parameters, "req_id": req_seq})
+
+        elif kind == "buy":
+            pos = positions.get(pending_buys.pop(msg.get("req_id"), None))
+            if pos is None:
                 return False
-            if not CONFIG.get("autoMartingale"):
-                return recovery_step < CONFIG["maxMartingaleSteps"]
-            if recovery_step >= ${AUTO_MAX_STEPS}:
+            pos["contract_id"] = msg["buy"]["contract_id"]
+            await send({"proposal_open_contract": 1, "contract_id": pos["contract_id"], "subscribe": 1})
+
+        elif kind == "proposal_open_contract":
+            c = msg.get("proposal_open_contract") or {}
+            if not c.get("is_sold"):
                 return False
-            nxt = min(recovery_stake(loss_so_far, contract, barrier), stake_cap())
-            budget = balance * ${AUTO_LADDER_BUDGET_PERCENT} / 100
-            if CONFIG["stopLoss"] > 0:
-                budget = min(budget, CONFIG["stopLoss"] + pnl)
-            return loss_so_far + nxt <= budget
-
-        await send({"authorize": TOKEN})
-        async for raw in ws:
-            msg = json.loads(raw)
-            kind = msg.get("msg_type")
-            if "error" in msg:
-                print(f"Deriv error ({kind}): {msg['error']['message']}")
-                if kind == "authorize":
-                    return
-                if kind == "buy":
-                    positions.pop((msg.get("echo_req", {}).get("passthrough") or {}).get("symbol"), None)
-                continue
-
-            if kind == "authorize":
-                a = msg["authorize"]
-                currency = a.get("currency") or "USD"
-                balance = start_balance = float(a["balance"])
-                if not a.get("is_virtual") and not ALLOW_REAL:
-                    sys.exit("This token is for a REAL account. Set ALLOW_REAL=1 only if you accept real-money risk.")
-                print(f"Logged in to {a['loginid']} ({'demo' if a.get('is_virtual') else 'REAL'}), balance {a['balance']} {currency}")
-                print(f"Mode {CONFIG['mode']}. Warming up: collecting {CONFIG['window']} ticks on {', '.join(SYMBOLS)}...")
-                for sym in SYMBOLS:
-                    await send({"ticks": sym, "subscribe": 1})
-
-            elif kind == "tick":
-                sym = msg["tick"]["symbol"]
-                book = books.get(sym)
-                if book is None:
-                    continue
-                book["digits"].append(last_digit(msg["tick"]["quote"], msg["tick"]["pip_size"]))
-                del book["digits"][:-3000]
-                tick_count += 1
-                setup = book["pick"] = pick_setup(book["digits"], book["streak"], recovery_loss > 0)
-                if setup is None:
-                    continue
-                if CONFIG.get("turbo"):
-                    if sym in positions:
-                        continue
-                elif positions or tick_count < cooldown_until or any(b["pick"] and b["pick"][2] > setup[2] for b in books.values()):
-                    continue
-                roll_day()
-                if CONFIG.get("dailyLossLimit", 0) > 0 and day_pnl <= -CONFIG["dailyLossLimit"]:
-                    if not day_paused:
-                        print("Daily loss limit reached: no new trades until 00:00 UTC.")
-                    day_paused = True
-                    continue
-                day_paused = False
-                contract, barrier, z, edge_p = setup
-                units = units_for(z, recovery_loss > 0, braked())
-                stake = stake_for(contract, barrier)
-                if CONFIG.get("kellySizing") and recovery_loss <= 0:
-                    stake = round(max(${MIN_STAKE}, min(kelly_stake(edge_p, contract, barrier), stake_cap())), 2)
-                if braked():
-                    stake = round(max(${MIN_STAKE}, stake / 2), 2)
-                if units > 1:
-                    stake = round(max(stake, min(stake * units, stake_cap())), 2)
-                positions[sym] = {"contract": contract, "barrier": barrier, "stake": stake, "symbol": sym, "units": units}
-                parameters = {
-                    "amount": stake,
-                    "basis": "stake",
-                    "contract_type": contract,
-                    "currency": currency,
-                    "duration": 1,
-                    "duration_unit": "t",
-                    "symbol": sym,
-                }
-                if barrier is not None:
-                    parameters["barrier"] = str(barrier)
-                await send({"buy": 1, "price": stake, "parameters": parameters, "passthrough": {"symbol": sym}})
-
-            elif kind == "buy":
-                pos = positions.get((msg.get("echo_req", {}).get("passthrough") or {}).get("symbol"))
-                if pos is None:
-                    continue
-                pos["contract_id"] = msg["buy"]["contract_id"]
-                await send({"proposal_open_contract": 1, "contract_id": pos["contract_id"], "subscribe": 1})
-
-            elif kind == "proposal_open_contract":
-                c = msg.get("proposal_open_contract") or {}
-                if not c.get("is_sold"):
-                    continue
-                open_trade = next((p for p in positions.values() if p.get("contract_id") == c.get("contract_id")), None)
-                if open_trade is None:
-                    continue
-                positions.pop(open_trade["symbol"], None)
-                if msg.get("subscription"):
-                    await send({"forget": msg["subscription"]["id"]})
-                profit = float(c["profit"])
-                pnl += profit
-                balance += profit
-                roll_day()
-                day_pnl += profit
-                trades += 1
-                if profit > 0:
-                    won += 1
-                    loss_streak = 0
-                    normal_win = CONFIG["stake"] * (payout(open_trade["contract"], open_trade["barrier"]) - 1)
-                    recovery_loss, recovery_step = max(0.0, recovery_loss - (profit - normal_win)), 0
+            open_trade = next((p for p in positions.values() if p.get("contract_id") == c.get("contract_id")), None)
+            if open_trade is None:
+                return False
+            positions.pop(open_trade["symbol"], None)
+            if msg.get("subscription"):
+                await send({"forget": msg["subscription"]["id"]})
+            profit = float(c["profit"])
+            pnl += profit
+            balance += profit
+            roll_day()
+            day_pnl += profit
+            trades += 1
+            if profit > 0:
+                won += 1
+                loss_streak = 0
+                normal_win = CONFIG["stake"] * (payout(open_trade["contract"], open_trade["barrier"]) - 1)
+                recovery_loss, recovery_step = max(0.0, recovery_loss - (profit - normal_win)), 0
+            else:
+                loss_streak += 1
+                if CONFIG["martingale"] and not CONFIG.get("turbo") and can_recover(recovery_loss + open_trade["stake"], open_trade["contract"], open_trade["barrier"]):
+                    recovery_loss += open_trade["stake"]
+                    recovery_step += 1
                 else:
-                    loss_streak += 1
-                    if CONFIG["martingale"] and not CONFIG.get("turbo") and can_recover(recovery_loss + open_trade["stake"], open_trade["contract"], open_trade["barrier"]):
-                        recovery_loss += open_trade["stake"]
-                        recovery_step += 1
+                    recovery_loss, recovery_step = 0.0, 0
+            result = "WIN " if profit > 0 else "LOSS "
+            name = f"{open_trade['symbol']} {label(open_trade['contract'], open_trade['barrier'])}"
+            if open_trade["units"] > 1:
+                name += f" x{open_trade['units']}"
+            print(f"#{trades} {name} \${open_trade['stake']:.2f} -> {result}{profit:.2f} | P/L {pnl:.2f} | win rate {won / trades * 100:.1f}%")
+            open_trade = None
+            peak_pnl = max(peak_pnl, pnl)
+            cooldown_until = tick_count + CONFIG["cooldownTicks"] + 1 + (0 if profit > 0 else CONFIG.get("lossCooldown", 0))
+
+            reason = None
+            if CONFIG["takeProfit"] > 0 and pnl >= CONFIG["takeProfit"]:
+                reason = "take profit reached"
+            elif CONFIG["stopLoss"] > 0 and pnl <= -CONFIG["stopLoss"]:
+                reason = "stop loss reached"
+            elif CONFIG["maxConsecutiveLosses"] > 0 and loss_streak >= CONFIG["maxConsecutiveLosses"]:
+                reason = f"{loss_streak} losses in a row"
+            if reason:
+                print(f"Stopped: {reason} | trades {trades} | P/L {pnl:.2f} {currency}")
+                return True
+        return False
+
+    try:
+        account = await loop.run_in_executor(None, pick_account)
+    except DerivRefused as err:
+        sys.exit(str(err))
+    currency = account.get("currency") or "USD"
+    balance = start_balance = float(account.get("balance") or 0)
+    kind_label = "demo" if account.get("account_type") == "demo" else "REAL"
+    print(f"Logged in to {account['account_id']} ({kind_label}), balance {balance:.2f} {currency}")
+    otp_path = f"/trading/v1/options/accounts/{urllib.parse.quote(account['account_id'])}/otp"
+
+    # Every (re)connect asks Deriv for a fresh one-time socket address, since each expires within moments.
+    while True:
+        try:
+            otp = await loop.run_in_executor(None, deriv_rest, otp_path, "POST")
+            url = (otp.get("data") or {}).get("url")
+            if not url:
+                raise RuntimeError("Deriv did not return a socket address")
+        except DerivRefused as err:
+            sys.exit(str(err))
+        except Exception as err:
+            print(f"Cannot reach Deriv ({err}), retrying in {retry_s}s...")
+            await asyncio.sleep(retry_s)
+            retry_s = min(60, retry_s * 2)
+            continue
+        try:
+            async with websockets.connect(url) as ws:
+                retry_s = 2
+                # Contracts bought before a reconnect are followed again; buys that never got an answer are dropped.
+                pending_buys.clear()
+                for sym, pos in list(positions.items()):
+                    if pos.get("contract_id"):
+                        await send({"proposal_open_contract": 1, "contract_id": pos["contract_id"], "subscribe": 1})
                     else:
-                        recovery_loss, recovery_step = 0.0, 0
-                result = "WIN " if profit > 0 else "LOSS "
-                name = f"{open_trade['symbol']} {label(open_trade['contract'], open_trade['barrier'])}"
-                if open_trade["units"] > 1:
-                    name += f" x{open_trade['units']}"
-                print(f"#{trades} {name} \${open_trade['stake']:.2f} -> {result}{profit:.2f} | P/L {pnl:.2f} | win rate {won / trades * 100:.1f}%")
-                open_trade = None
-                peak_pnl = max(peak_pnl, pnl)
-                cooldown_until = tick_count + CONFIG["cooldownTicks"] + 1 + (0 if profit > 0 else CONFIG.get("lossCooldown", 0))
-
-                reason = None
-                if CONFIG["takeProfit"] > 0 and pnl >= CONFIG["takeProfit"]:
-                    reason = "take profit reached"
-                elif CONFIG["stopLoss"] > 0 and pnl <= -CONFIG["stopLoss"]:
-                    reason = "stop loss reached"
-                elif CONFIG["maxConsecutiveLosses"] > 0 and loss_streak >= CONFIG["maxConsecutiveLosses"]:
-                    reason = f"{loss_streak} losses in a row"
-                if reason:
-                    print(f"Stopped: {reason} | trades {trades} | P/L {pnl:.2f} {currency}")
-                    return
-
+                        positions.pop(sym, None)
+                print(f"Mode {CONFIG['mode']}. Loading the last {history_ticks} ticks on {', '.join(SYMBOLS)}...")
+                for sym in SYMBOLS:
+                    await send({"ticks_history": sym, "end": "latest", "count": history_ticks, "style": "ticks", "subscribe": 1})
+                async for raw in ws:
+                    if await on_message(raw):
+                        return
+        except (websockets.ConnectionClosed, OSError) as err:
+            print(f"Connection lost ({err}), reconnecting...")
+        await asyncio.sleep(retry_s)
 
 if __name__ == "__main__":
     asyncio.run(main())

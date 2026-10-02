@@ -324,7 +324,7 @@ export class LiveRunner {
       currency: this.status.currency,
       duration: 1,
       duration_unit: "t",
-      symbol: open.market,
+      underlying_symbol: open.market,
     };
     if (open.setup.barrier !== null) parameters.barrier = String(open.setup.barrier);
     this.send({ buy: 1, price: open.stake, parameters, req_id: id });
