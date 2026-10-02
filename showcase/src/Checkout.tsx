@@ -6,6 +6,7 @@ import { symbolName } from "./market";
 import { PayPalButton } from "./PayPalButton";
 import { COUPONS, PLAN_PRICES, quote, type PlanId } from "./pricing";
 import { LicenceFiles } from "./Purchase";
+import { ReceiptButton } from "./ReceiptButton";
 import {
   capturePayPalOrder,
   createPayPalOrder,
@@ -22,7 +23,6 @@ type PayMethod = "card" | "paypal" | "mpesa";
 
 interface Plan {
   id: PlanId;
-  was?: number;
   setup: string;
   /** What happens after payment for the setup part of the order. */
   setupNext: string;
@@ -45,7 +45,6 @@ const PLANS: Plan[] = [
   },
   {
     id: "pro",
-    was: 199,
     setup: "Live setup call",
     setupNext: "We'll email you within 24 hours to book a live call. We connect the bot to your Deriv account and test it with you.",
     tagline: "We set it up with you",
@@ -219,6 +218,10 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
             <span>Paid <strong>{paid.amount}</strong></span>
             <span>{METHOD_LABEL[paid.method]}</span>
           </div>
+          <div className="co-receipt-actions">
+            <ReceiptButton licence={paid.licence} className="btn solid" />
+            <a className="btn ghost" href="#/account">Your account</a>
+          </div>
           <div className="co-card co-next">
             <header className="pane-head"><span>Setup · {plan.setup}</span><span className="co-paid">Paid</span></header>
             <div className="pane-body"><p>{plan.setupNext}</p></div>
@@ -251,9 +254,9 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
                       <span className="co-tag">{p.tagline}</span>
                       <span className="co-price">
                         ${pp.price}
-                        {p.was && <s>${p.was}</s>}
+                        <s>${pp.was}</s>
                       </span>
-                      <span className="co-setup">+ ${pp.setupFee} setup · {p.setup}</span>
+                      <span className="co-setup">{p.setup} included · no setup fee</span>
                       <ul>{p.perks.map((x) => <li key={x}>{x}</li>)}</ul>
                     </button>
                   );
@@ -368,7 +371,7 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
               <div className="pane-body">
                 <div className="co-line big">
                   <span>{BOT_NAME}<em>{price.name} licence + {plan.setup.toLowerCase()}</em></span>
-                  <strong>{usd(price.price + price.setupFee)}</strong>
+                  <strong>{usd(price.price)}</strong>
                 </div>
                 <dl className="co-config">
                   <div><dt>Mode</dt><dd>{MODES.find((m) => m.id === settings.mode)?.label}</dd></div>
@@ -389,7 +392,7 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
                 {couponError && <span className="co-err">{couponError}</span>}
 
                 <div className="co-line"><span>Licence</span><span>{usd(price.price)}</span></div>
-                <div className="co-line"><span>Setup fee · {plan.setup}<em>One-time</em></span><span>{usd(price.setupFee)}</span></div>
+                <div className="co-line"><span>{plan.setup}<em>Included</em></span><span className="co-free">Free</span></div>
                 {q.coupon && (
                   <div className="co-line up">
                     <span>{q.coupon} · {COUPONS[q.coupon] * 100}% off licence</span><span>−{usd(q.discount)}</span>

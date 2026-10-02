@@ -136,7 +136,10 @@ export const startMpesa = (order: OrderInput & { phone: string }) =>
   post<{ reference: string; amountKes: number }>("/api/pay/mpesa/start", { ...order });
 
 export async function pollMpesa(reference: string): Promise<MpesaPoll> {
-  const res = await fetch(`/api/pay/mpesa/status?reference=${encodeURIComponent(reference)}`);
+  const token = accountToken();
+  const res = await fetch(`/api/pay/mpesa/status?reference=${encodeURIComponent(reference)}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
   return data as MpesaPoll;
@@ -144,6 +147,28 @@ export async function pollMpesa(reference: string): Promise<MpesaPoll> {
 
 export const lookupLicence = (licence: string, email: string) =>
   post<Licence>("/api/licence", { licence, email });
+
+export interface ReceiptData {
+  orderId: string;
+  at: number;
+  licence: string;
+  plan: string;
+  version: string;
+  email: string;
+  name: string;
+  method: string;
+  coupon: string;
+  licencePrice: number;
+  setupFee: number;
+  total: number;
+  paid: number;
+  currency: string;
+  paymentRef: string;
+  refunded?: { at: number; reason: string };
+}
+
+/** Order details for a licence on the signed-in account. */
+export const fetchReceipt = (licence: string) => post<ReceiptData>("/api/receipt", { licence });
 
 export async function fetchRelease(): Promise<Release | null> {
   try {

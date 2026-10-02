@@ -6,13 +6,16 @@ export interface PlanPrice {
   id: PlanId;
   name: string;
   price: number;
+  /** Price before the cut, shown struck through. */
+  was: number;
+  /** Kept on orders for the admin view; setup is now included free. */
   setupFee: number;
 }
 
 export const PLAN_PRICES: Record<PlanId, PlanPrice> = {
-  lite: { id: "lite", name: "Starter", price: 59, setupFee: 19 },
-  pro: { id: "pro", name: "Pro", price: 149, setupFee: 49 },
-  lifetime: { id: "lifetime", name: "Lifetime", price: 299, setupFee: 99 },
+  lite: { id: "lite", name: "Starter", price: 29, was: 59, setupFee: 0 },
+  pro: { id: "pro", name: "Pro", price: 79, was: 149, setupFee: 0 },
+  lifetime: { id: "lifetime", name: "Lifetime", price: 149, was: 299, setupFee: 0 },
 };
 
 export const COUPONS: Record<string, number> = { NYC10: 0.1, LAUNCH20: 0.2 };
@@ -29,7 +32,7 @@ export interface Quote {
   totalKes: number;
 }
 
-/** The coupon applies to the licence only; the setup fee is always paid in full. */
+/** The coupon applies to the licence; setup is included at no charge. */
 export function quote(planId: string, couponCode?: string | null): Quote | null {
   const plan = PLAN_PRICES[planId as PlanId];
   if (!plan) return null;

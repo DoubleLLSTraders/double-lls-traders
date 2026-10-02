@@ -417,6 +417,14 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
     return p ? licenceReply(p) : null;
   };
 
+  /** Only the account that started a payment may poll or capture it, so a leaked order id cannot reveal the licence. */
+  const ownsPayment = async (req: Request, key: string) => {
+    const p = ((await kv.get<Purchase[]>(K.purchases)) ?? []).find((x) => x.providerKey === key);
+    const accountId = p ? p.accountId : (await getPending(key))?.accountId;
+    if (!accountId) return true;
+    return (await accountFromRequest(kv, req))?.user.id === accountId;
+  };
+
   const fulfil = async (key: string, order: PendingOrder, pay: { paid: number; currency: string; paymentRef: string; name?: string }) => {
     const q = quote(order.plan, order.coupon)!;
     const version = (await latest()).version;
@@ -579,7 +587,9 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
 
       if (path === "/api/pay/mpesa/status" && req.method === "GET") {
         if (rateLimited(ip)) return json(429, { error: "Too many requests." });
-        return json(200, await checkMpesa(str(url.searchParams.get("reference"), 60)));
+        const reference = str(url.searchParams.get("reference"), 60);
+        if (!(await ownsPayment(req, reference))) return json(403, { error: "Sign in with the account that started this payment." });
+        return json(200, await checkMpesa(reference));
       }
 
       // PayHero posts here when the customer finishes on their phone. The body is not trusted;
@@ -599,7 +609,9 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
       if (path === "/api/pay/paypal/webhook" && req.method === "POST") {
         if (!payEnv.PAYPAL_WEBHOOK_ID) return json(503, { error: "PAYPAL_WEBHOOK_ID is not set." });
         const event = (await readJson(req)) as PayPalWebhookEvent;
-        if (!(await verifyPayPalWebhook(payEnv, req.headers, event))) return json(400, { error: "Signature check failed." });
+        const verified = await verifyPayPalWebhook(payEnv, req.headers, event);
+        console.log(`[paypal-webhook] ${event.event_type ?? "unknown"} ${event.id ?? ""} ${verified ? "verified" : "rejected: signature check failed"}`);
+        if (!verified) return json(400, { error: "Signature check failed." });
         const r = event.resource ?? {};
         const orderId = r.supplementary_data?.related_ids?.order_id ?? "";
         const upCapture = (r.links ?? []).find((l) => l.rel === "up" && /\/captures\//.test(l.href ?? ""))?.href?.split("/").pop() ?? "";
@@ -717,6 +729,7 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
 
       if (path === "/api/pay/paypal/capture") {
         const ppId = str(body.orderId, 40);
+        if (!(await ownsPayment(req, ppId))) return json(403, { error: "Sign in with the account that started this payment." });
         const done = await paidFor(ppId);
         if (done) return json(200, done);
         const order = await getPending(ppId);
@@ -751,6 +764,34 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
         });
         await savePending(stk.reference, order);
         return json(200, { reference: stk.reference, amountKes: order.totalKes });
+      }
+
+      if (path === "/api/receipt") {
+        const owner = await accountFromRequest(kv, req);
+        if (!owner) return json(401, { error: "Sign in to download your receipt." });
+        const licence = str(body.licence, 32).toUpperCase();
+        const p = ((await kv.get<Purchase[]>(K.purchases)) ?? []).find(
+          (x) => x.licence === licence && (x.accountId === owner.user.id || x.email === owner.user.email),
+        );
+        if (!p) return json(404, { error: "No purchase on this account matches that licence." });
+        return json(200, {
+          orderId: p.orderId,
+          at: p.at,
+          licence: p.licence,
+          plan: p.plan,
+          version: p.version,
+          email: p.email,
+          name: p.name,
+          method: p.method,
+          coupon: p.coupon,
+          licencePrice: p.licencePrice,
+          setupFee: p.setupFee,
+          total: p.total,
+          paid: p.paid ?? p.total,
+          currency: p.currency ?? "USD",
+          paymentRef: p.paymentRef ?? "",
+          ...(p.refunded ? { refunded: p.refunded } : {}),
+        });
       }
 
       if (path === "/api/licence") {

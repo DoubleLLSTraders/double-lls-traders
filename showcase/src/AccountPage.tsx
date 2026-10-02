@@ -17,6 +17,7 @@ import {
   type AccountLicence,
 } from "./account";
 import { ApiKeysCard } from "./ApiKeysCard";
+import { ReceiptButton } from "./ReceiptButton";
 import { HISTORY_EVENT, loadHistory } from "./sessionStore";
 import { useLicence } from "./siteClient";
 
@@ -461,7 +462,10 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
               <div key={l.licence} className="acct-licence">
                 <code>{l.licence}</code>
                 <span className="muted">{l.plan} · v{l.version}{l.addedAt ? ` · ${new Date(l.addedAt).toLocaleDateString()}` : ""}</span>
-                <a className="btn outline sm" href="#/licence">Download</a>
+                <span className="acct-licence-actions">
+                  <ReceiptButton licence={l.licence} />
+                  <a className="btn outline sm" href="#/licence">Download</a>
+                </span>
               </div>
             ))}
           </div>

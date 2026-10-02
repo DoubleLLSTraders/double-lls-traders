@@ -504,17 +504,16 @@ button { font: inherit; color: inherit; cursor: pointer; background: none; borde
 .infotip-btn:hover, .infotip.open .infotip-btn { color: var(--text); background: rgba(255, 255, 255, 0.06); }
 .infotip-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 .infotip-pop {
-  position: absolute; top: calc(100% + 8px); z-index: 40; width: min(300px, calc(100vw - 32px));
+  position: fixed; z-index: 1000; width: min(300px, calc(100vw - 16px));
   display: grid; gap: 8px; padding: 14px 16px; border-radius: 12px;
   background: #111214; border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+  font-family: var(--sans); letter-spacing: 0; text-transform: none;
   font-size: 12.5px; line-height: 1.55; color: var(--text-2); text-align: left; white-space: normal;
-  opacity: 0; visibility: hidden; transform: translateY(-4px);
-  transition: opacity 0.15s, transform 0.15s, visibility 0s 0.15s;
+  opacity: 0; visibility: hidden; transform: translateY(-4px); pointer-events: none;
+  transition: opacity 0.15s, transform 0.15s;
 }
-.infotip.right .infotip-pop { right: -6px; }
-.infotip.left .infotip-pop { left: -6px; }
-.infotip.open .infotip-pop { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+.infotip-pop.shown { opacity: 1; visibility: visible; transform: none; pointer-events: auto; }
 .infotip-pop strong { font-size: 13px; font-weight: 600; color: var(--text); }
 
 .term-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); margin: 22px 0 10px; }
@@ -1174,6 +1173,7 @@ html.hp-lock, html.hp-lock body { overflow: hidden; }
 .co-line.big { color: var(--text); padding-bottom: 14px; }
 .co-line.big em { display: block; font-style: normal; font-size: 12.5px; color: var(--text-3); }
 .co-line.up { color: var(--up); }
+.co-free { color: var(--up); font-weight: 500; }
 .co-line.total { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 16px; color: var(--text); font-size: 16px; }
 .co-line.total strong { font-family: var(--display); font-size: 28px; font-weight: 500; letter-spacing: -0.02em; }
 .co-config { display: flex; gap: 0; margin: 0 0 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -1200,6 +1200,8 @@ html.hp-lock, html.hp-lock body { overflow: hidden; }
 @keyframes co-draw { to { stroke-dashoffset: 0; } }
 .co-receipt { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 24px; margin: 28px 0 32px; padding: 12px 22px; border-radius: 999px; border: 1px solid var(--line-2); font-size: 13px; color: var(--text-3); text-transform: capitalize; }
 .co-receipt strong { color: var(--text); font-weight: 500; font-family: var(--mono); margin-left: 4px; }
+.co-receipt-actions { display: flex; justify-content: center; align-items: center; gap: 10px; flex-wrap: wrap; margin: -14px 0 32px; }
+.receipt-err { flex-basis: 100%; text-align: center; }
 .co-files { text-align: left; }
 
 @media (max-width: 1080px) {
@@ -1571,6 +1573,7 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .acct-sessions b { font-family: var(--mono); font-weight: 500; font-size: 13px; }
 .acct-licence { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .acct-licence code { font-family: var(--mono); font-size: 15px; letter-spacing: 0.06em; color: var(--text); }
+.acct-licence-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .acct-foot { display: flex; justify-content: space-between; padding: 4px 0 20px; }
 .acct-forgot { align-self: flex-end; margin: -6px 0 12px auto; display: block; font-size: 12.5px; color: var(--text-3); }
 .acct-forgot:hover { color: var(--text); }

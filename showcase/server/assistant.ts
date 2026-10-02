@@ -14,7 +14,7 @@ When search results are available, use them for prices and news and name the sou
 Answer in at most 120 words unless asked for more. Short bullets or short paragraphs. No hype.
 Never promise profit. For buy/sell questions explain the factors and risks instead of giving personal financial advice.
 The dashboard runs on a simulated market with a balance the user chooses (default $10,000); its results do not predict real-market results.
-Pricing (licence + one-time setup fee, paid together): Starter $59 + $19 setup = $78; Pro $149 + $49 setup = $198 (most popular); Lifetime $299 + $99 setup = $398.
+Pricing (one-off licence price, no setup fee; setup help is included free): Starter $29 (was $59); Pro $79 (was $149, most popular); Lifetime $149 (was $299).
 Payment: debit or credit card (through PayPal), PayPal, or M-Pesa.
 Every plan includes all formats: Deriv Bot XML (runs in any browser on phone, tablet or PC), JavaScript (Node.js) and Python (Windows, macOS, Linux or a VPS), plus a settings JSON. Plans differ by updates, support and setup level. 7-day money-back guarantee.`;
 

@@ -16,7 +16,50 @@ const AccountPage = lazy(() => import("./AccountPage"));
 type View = "landing" | "test" | "checkout" | "licence";
 
 const PRESENCE_MS = 10_000;
-const route = () => window.location.hash.replace(/^#\/?/, "");
+/** Pages that also have a real path (/docs, /terms…), so search engines can index them; netlify.toml serves them. */
+const PATH_PAGES = new Set(["docs", "developers", "terms", "privacy"]);
+const route = () => {
+  if (window.location.hash) return window.location.hash.replace(/^#\/?/, "");
+  const path = window.location.pathname.replace(/^\/+|\/+$/g, "");
+  return PATH_PAGES.has(path) ? path : "";
+};
+
+const SITE_URL = "https://llsbot.malimines.com";
+const PAGE_META: Record<string, { title: string; description: string; path: string }> = {
+  "": {
+    title: "Double LLS Trading Bot — Deriv Digit Bot for Matches, Differs, Over/Under & Even/Odd",
+    description:
+      "Double LLS Trading Bot scans every tick and trades Deriv digit contracts (Matches, Differs, Over/Under, Even/Odd) only when a setup proves its edge. Test it free live, then get it as Deriv Bot XML, JavaScript or Python.",
+    path: "/",
+  },
+  docs: {
+    title: "Docs & API — Double LLS Trading Bot",
+    description: "How to run the Double LLS Trading Bot on Deriv Bot, JavaScript or Python, plus the public API for live market scans and bot signals.",
+    path: "/docs",
+  },
+  developers: {
+    title: "Developer API — Double LLS Trading Bot",
+    description: "Public API for Deriv digit market scans, bot signals and backtests from the Double LLS Trading Bot.",
+    path: "/developers",
+  },
+  terms: {
+    title: "Terms of Service — Double LLS Trading Bot",
+    description: "The terms that apply when you use the Double LLS Trading Bot website, licences and downloads.",
+    path: "/terms",
+  },
+  privacy: {
+    title: "Privacy Policy — Double LLS Trading Bot",
+    description: "What the Double LLS Trading Bot website collects, why, and how to have your data deleted.",
+    path: "/privacy",
+  },
+};
+
+function applyPageMeta(page: string) {
+  const meta = PAGE_META[page] ?? PAGE_META[""];
+  document.title = meta.title;
+  document.querySelector('meta[name="description"]')?.setAttribute("content", meta.description);
+  document.querySelector('link[rel="canonical"]')?.setAttribute("href", `${SITE_URL}${meta.path}`);
+}
 
 export default function App() {
   const [hash, setHash] = useState(route);
@@ -42,6 +85,8 @@ export default function App() {
   useEffect(() => {
     if (!isAdmin) trackVisit();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => applyPageMeta(hash), [hash]);
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
