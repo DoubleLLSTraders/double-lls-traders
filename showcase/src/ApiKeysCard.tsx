@@ -39,7 +39,7 @@ export function ApiKeysCard() {
   };
 
   const revoke = async (k: ApiKeyInfo) => {
-    if (!confirm(`Revoke "${k.name || k.prefix}"? Apps and agents using it stop working, and its paper sessions are deleted.`)) return;
+    if (!confirm(`Revoke "${k.name || k.prefix}"? Apps and agents using it stop working, and its simulated sessions are deleted.`)) return;
     try {
       await revokeApiKey(k);
       if (fresh?.startsWith(k.prefix)) setFresh(null);
@@ -58,7 +58,7 @@ export function ApiKeysCard() {
         <a className="muted keys-docs" href="#/docs">Read the docs ›</a>
       </header>
       <div className="pane-body keys">
-        <p className="keys-intro">Let your own apps and AI agents (Cursor, Claude, ChatGPT…) use the bot: scan markets, backtest, run paper sessions and export bots.</p>
+        <p className="keys-intro">Let your own apps and AI agents (Cursor, Claude, ChatGPT…) use the bot: scan markets, backtest, run simulated sessions and export bots.</p>
 
         {fresh && (
           <div className="keys-fresh">

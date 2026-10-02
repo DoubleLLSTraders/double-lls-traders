@@ -123,7 +123,14 @@ export async function fetchPayConfig(): Promise<PayConfig | null> {
 export const createPayPalOrder = (order: OrderInput & { method: "paypal" | "card" }) =>
   post<{ id: string }>("/api/pay/paypal/create", { ...order });
 
-export const capturePayPalOrder = (orderId: string) => post<PaidOrder>("/api/pay/paypal/capture", { orderId });
+/** A payment PayPal is holding for review; the licence is issued by webhook once it clears. */
+export interface ReviewOrder {
+  status: "pending";
+  orderId: string;
+  message: string;
+}
+
+export const capturePayPalOrder = (orderId: string) => post<PaidOrder | ReviewOrder>("/api/pay/paypal/capture", { orderId });
 
 export const startMpesa = (order: OrderInput & { phone: string }) =>
   post<{ reference: string; amountKes: number }>("/api/pay/mpesa/start", { ...order });

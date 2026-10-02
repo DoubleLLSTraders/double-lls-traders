@@ -11,6 +11,8 @@ export interface PaymentEnv {
   PAYPAL_CLIENT_ID?: string;
   PAYPAL_CLIENT_SECRET?: string;
   PAYPAL_ENV?: string;
+  /** Id of the webhook registered in the PayPal developer dashboard, used to verify webhook signatures. */
+  PAYPAL_WEBHOOK_ID?: string;
   PAYHERO_API_USERNAME?: string;
   PAYHERO_API_PASSWORD?: string;
   PAYHERO_BASIC_AUTH?: string;
@@ -109,6 +111,8 @@ export async function capturePayPalOrder(env: PaymentEnv, orderId: string) {
   const paid = order.status === "COMPLETED" && capture?.status === "COMPLETED";
   return {
     paid,
+    /** PayPal took the payment but is holding it for review; PAYMENT.CAPTURE.COMPLETED arrives by webhook later. */
+    pending: capture?.status === "PENDING",
     reference: unit?.reference_id ?? "",
     captureId: capture?.id ?? "",
     amount: Number(capture?.amount?.value ?? 0),
@@ -116,6 +120,35 @@ export async function capturePayPalOrder(env: PaymentEnv, orderId: string) {
     payerEmail: order.payer?.email_address ?? "",
     payerName: [order.payer?.name?.given_name, order.payer?.name?.surname].filter(Boolean).join(" "),
   };
+}
+
+export interface PayPalWebhookEvent {
+  id?: string;
+  event_type?: string;
+  resource?: {
+    id?: string;
+    status?: string;
+    amount?: { value?: string; currency_code?: string };
+    supplementary_data?: { related_ids?: { order_id?: string } };
+    links?: { href?: string; rel?: string }[];
+  };
+}
+
+/** Asks PayPal whether a webhook delivery is genuine. Unverifiable deliveries must be ignored. */
+export async function verifyPayPalWebhook(env: PaymentEnv, headers: Headers, event: PayPalWebhookEvent) {
+  const webhookId = (env.PAYPAL_WEBHOOK_ID ?? "").trim();
+  if (!webhookId) return false;
+  const h = (name: string) => headers.get(name) ?? "";
+  const res = await paypalApi(env, "POST", "/v1/notifications/verify-webhook-signature", {
+    auth_algo: h("paypal-auth-algo"),
+    cert_url: h("paypal-cert-url"),
+    transmission_id: h("paypal-transmission-id"),
+    transmission_sig: h("paypal-transmission-sig"),
+    transmission_time: h("paypal-transmission-time"),
+    webhook_id: webhookId,
+    webhook_event: event,
+  });
+  return res.status < 300 && res.data.verification_status === "SUCCESS";
 }
 
 /* ---------- PayHero M-Pesa ---------- */

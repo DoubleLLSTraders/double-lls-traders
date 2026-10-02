@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { parseBotJson } from "../src/exports";
 import { CLOUD_BOTS, cloudDb, publicCloudBot, type CloudBotDoc } from "./cloudBots";
 import type { Kv } from "./kv";
+import { verifyFirebaseIdToken } from "./firebaseAuth";
 import { deleteAccountApiData } from "./publicApi";
 import { encryptToken } from "./tokenCrypto";
 
@@ -40,6 +41,9 @@ interface User {
   settings: Record<string, unknown> | null;
   settingsAt: number;
   licences: AccountLicence[];
+  /** Firebase Authentication user that owns this account. Once set, the legacy password hash is no longer accepted. */
+  firebaseUid?: string;
+  emailVerified?: boolean;
 }
 
 interface Token {
@@ -52,6 +56,7 @@ interface Purchase {
   plan: string;
   email: string;
   version: string;
+  refunded?: unknown;
 }
 
 const K = {
@@ -151,6 +156,15 @@ export async function linkLicence(kv: Kv, userKey: string, p: Purchase) {
   });
 }
 
+/** Removes a refunded licence from the account registered with that email, if any. */
+export async function unlinkLicence(kv: Kv, email: string, licence: string) {
+  const key = K.user(email.toLowerCase());
+  if (!(await kv.get<User>(key))) return;
+  await kv.update<User | null>(key, () => null, (u) => {
+    if (u) u.licences = u.licences.filter((l) => l.licence !== licence);
+  });
+}
+
 /**
  * Customer accounts: email + password sign-up, saved bot settings, test-drive sessions and licences.
  * Routes live under /api/account. Returns null for anything else.
@@ -158,7 +172,20 @@ export async function linkLicence(kv: Kv, userKey: string, p: Purchase) {
 export function createAccounts(env: Record<string, string | undefined>, kv: Kv) {
   const signups = new Map<string, number[]>();
 
-  const publicUser = (u: User) => ({ email: u.email, name: u.name, createdAt: u.createdAt });
+  const publicUser = (u: User) => ({ email: u.email, name: u.name, createdAt: u.createdAt, emailVerified: u.emailVerified === true });
+
+  const firebaseIdentity = async (body: Record<string, unknown>) => {
+    const idToken = str(body.idToken, 4096);
+    if (!idToken) throw new AccountError(400, "Missing sign-in token.");
+    const decoded = await verifyFirebaseIdToken(env, idToken).catch((err: unknown) => {
+      console.warn("firebase token rejected:", (err as { code?: string })?.code ?? "", err instanceof Error ? err.message : String(err));
+      return null;
+    });
+    if (!decoded) throw new AccountError(401, "Your sign-in expired. Please try again.");
+    const email = (decoded.email ?? "").toLowerCase();
+    if (!EMAIL_RE.test(email)) throw new AccountError(400, "This sign-in has no email address.");
+    return { uid: decoded.uid, email, verified: decoded.email_verified === true };
+  };
 
   const issueToken = async (userKey: string) => {
     const token = `acc_${randomBytes(32).toString("base64url")}`;
@@ -205,44 +232,61 @@ export function createAccounts(env: Record<string, string | undefined>, kv: Kv) 
 
     try {
       if (route === "POST /signup") {
+        throw new AccountError(410, "Sign-up has moved. Refresh the page and try again.");
+      }
+
+      // Sign-up and sign-in both happen in Firebase Authentication; this swaps the Firebase ID token for a site session.
+      if (route === "POST /firebase") {
         const body = await readJson(req);
-        const { email, password } = credentials(body);
-        if (password.length < 8 || password.length > 200) throw new AccountError(400, "Use a password of at least 8 characters.");
-        if (body.acceptTerms !== true) throw new AccountError(400, "Please accept the Terms and Privacy Policy.");
+        const id = await firebaseIdentity(body);
+        const userKey = K.user(id.email);
         const now = Date.now();
-        const recent = (signups.get(ip) ?? []).filter((t) => now - t < 3_600_000);
-        if (recent.length >= SIGNUPS_PER_HOUR) throw new AccountError(429, "Too many new accounts from here. Try again later.");
-        const userKey = K.user(email);
-        if (await kv.get<User>(userKey)) throw new AccountError(409, "That email already has an account. Sign in instead.");
-        const salt = randomBytes(16).toString("hex");
-        const user: User = {
-          id: randomBytes(9).toString("base64url"),
-          email,
-          name: str(body.name, 60),
-          salt,
-          hash: await hashPassword(password, salt),
-          createdAt: now,
-          lastLogin: now,
-          termsVersion: ACCOUNT_TERMS_VERSION,
-          tokens: [],
-          fails: [],
-          settings: null,
-          settingsAt: 0,
-          licences: [],
-        };
-        let taken = false;
-        await kv.update<User | null>(userKey, () => null, (u) => {
+        const existing = await kv.get<User>(userKey);
+        if (!existing) {
+          if (body.acceptTerms !== true) throw new AccountError(428, "Please accept the Terms and Privacy Policy to finish creating your account.");
+          const recent = (signups.get(ip) ?? []).filter((t) => now - t < 3_600_000);
+          if (recent.length >= SIGNUPS_PER_HOUR) throw new AccountError(429, "Too many new accounts from here. Try again later.");
+          recent.push(now);
+          signups.set(ip, recent);
+        }
+        let conflict = false;
+        let created = false;
+        const user = await kv.update<User | null>(userKey, () => null, (u) => {
+          conflict = false;
+          created = false;
           if (u) {
-            taken = true;
+            if (u.firebaseUid && u.firebaseUid !== id.uid) {
+              conflict = true;
+              return u;
+            }
+            u.firebaseUid = id.uid;
+            u.emailVerified = id.verified;
+            u.lastLogin = now;
+            u.fails = [];
             return u;
           }
-          return user;
+          created = true;
+          return {
+            id: randomBytes(9).toString("base64url"),
+            email: id.email,
+            name: str(body.name, 60),
+            salt: "",
+            hash: "",
+            createdAt: now,
+            lastLogin: now,
+            termsVersion: ACCOUNT_TERMS_VERSION,
+            tokens: [],
+            fails: [],
+            settings: null,
+            settingsAt: 0,
+            licences: [],
+            firebaseUid: id.uid,
+            emailVerified: id.verified,
+          } satisfies User;
         });
-        if (taken) throw new AccountError(409, "That email already has an account. Sign in instead.");
-        recent.push(now);
-        signups.set(ip, recent);
+        if (conflict || !user) throw new AccountError(409, "That email belongs to another sign-in. Contact support@malimines.com.");
         const token = await issueToken(userKey);
-        return json(201, { token, ...(await fullAccount(user)) });
+        return json(created ? 201 : 200, { token, ...(await fullAccount(user)) });
       }
 
       if (route === "POST /login") {
@@ -253,7 +297,7 @@ export function createAccounts(env: Record<string, string | undefined>, kv: Kv) 
         const fails = (user?.fails ?? []).filter((t) => now - t < LOCK_MS);
         if (fails.length >= LOCK_FAILS) throw new AccountError(429, "Too many wrong passwords. Try again in 15 minutes.");
         const hash = await hashPassword(password, user?.salt ?? "no-account-salt");
-        const ok = !!user && timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.hash, "hex"));
+        const ok = !!user && !user.firebaseUid && user.hash.length === hash.length && timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.hash, "hex"));
         if (!ok) {
           if (user) {
             await kv.update<User | null>(userKey, () => null, (u) => {
@@ -274,6 +318,17 @@ export function createAccounts(env: Record<string, string | undefined>, kv: Kv) 
       const { user, userKey, tokenHash } = await authed(req);
 
       if (route === "GET /") return json(200, await fullAccount(user));
+
+      if (route === "PUT /verification") {
+        const id = await firebaseIdentity(await readJson(req));
+        if (id.email !== user.email || (user.firebaseUid && user.firebaseUid !== id.uid)) throw new AccountError(403, "That sign-in belongs to a different account.");
+        const updated = await kv.update<User | null>(userKey, () => null, (u) => {
+          if (!u) return;
+          u.firebaseUid = id.uid;
+          u.emailVerified = id.verified;
+        });
+        return json(200, await fullAccount(updated ?? user));
+      }
 
       if (route === "POST /logout") {
         await kv.delete(K.token(tokenHash));
@@ -320,6 +375,7 @@ export function createAccounts(env: Record<string, string | undefined>, kv: Kv) 
         const licence = str(body.licence, 32).toUpperCase();
         const p = ((await kv.get<Purchase[]>("purchases")) ?? []).find((x) => x.licence === licence);
         if (!p) throw new AccountError(404, "No licence matches that key.");
+        if (p.refunded) throw new AccountError(403, "That licence was refunded and is no longer active.");
         const entry: AccountLicence = { licence: p.licence, plan: p.plan, email: p.email, version: str(body.version, 20) || p.version, addedAt: Date.now() };
         const updated = await kv.update<User | null>(userKey, () => null, (u) => {
           if (!u) return;
@@ -347,6 +403,7 @@ export function createAccounts(env: Record<string, string | undefined>, kv: Kv) 
           const prev = (await ref.get()).data() as CloudBotDoc | undefined;
           const enabled = body.enabled === true;
           const licence = user.licences[user.licences.length - 1]?.licence ?? "";
+          if (enabled && !user.emailVerified) throw new AccountError(403, "Verify your email address first. We sent you a link when you signed up.");
           if (enabled && !licence) throw new AccountError(403, "The cloud bot comes with a licence. Add your licence key to this account first.");
           const derivToken = str(body.derivToken, 600);
           if (derivToken && !/^[\w.~+/=-]{8,512}$/.test(derivToken)) throw new AccountError(400, "That does not look like a Deriv access token.");

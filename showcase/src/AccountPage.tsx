@@ -1,6 +1,20 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { CloudBotCard } from "./CloudBotCard";
-import { deleteAccount, refreshAccount, signIn, signOut, signUp, syncNow, useAccount, useSyncStatus, type AccountLicence } from "./account";
+import {
+  changePassword,
+  deleteAccount,
+  refreshAccount,
+  refreshVerification,
+  resendVerification,
+  sendPasswordReset,
+  signIn,
+  signOut,
+  signUp,
+  syncNow,
+  useAccount,
+  useSyncStatus,
+  type AccountLicence,
+} from "./account";
 import { ApiKeysCard } from "./ApiKeysCard";
 import { HISTORY_EVENT, loadHistory } from "./sessionStore";
 import { useLicence } from "./siteClient";
@@ -33,8 +47,57 @@ function useHistory() {
   return list;
 }
 
+function ResetForm({ initialEmail, onBack }: { initialEmail: string; onBack: () => void }) {
+  const [email, setEmail] = useState(initialEmail);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await sendPasswordReset(email);
+      setSent(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="co-card acct-card" onSubmit={submit}>
+      <h1>Reset your password</h1>
+      {sent ? (
+        <>
+          <p className="acct-sub">
+            If <strong>{email.trim()}</strong> has an account, a reset link is on its way. Open it, choose a new password, then sign in here.
+            Check your spam folder if it does not arrive in a minute.
+          </p>
+          <button type="button" className="btn solid lg acct-submit" onClick={onBack}>Back to sign in</button>
+        </>
+      ) : (
+        <>
+          <p className="acct-sub">Enter the email you signed up with and we will send you a link to choose a new password.</p>
+          <label className="co-field">
+            <span>Email</span>
+            <input type="email" required autoFocus autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          {error && <span className="co-err">{error}</span>}
+          <button className="btn solid lg acct-submit" disabled={busy || !email.trim()}>{busy ? "Sending…" : "Send reset link"}</button>
+          <p className="acct-switch">
+            Remembered it? <button type="button" onClick={onBack}>Sign in</button>
+          </p>
+        </>
+      )}
+    </form>
+  );
+}
+
 function AuthForm({ forPurchase }: { forPurchase?: boolean }) {
-  const [mode, setMode] = useState<"signup" | "signin">("signup");
+  const [mode, setMode] = useState<"signup" | "signin" | "reset">("signup");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,6 +106,8 @@ function AuthForm({ forPurchase }: { forPurchase?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const signup = mode === "signup";
+
+  if (mode === "reset") return <ResetForm initialEmail={email} onBack={() => { setMode("signin"); setError(null); }} />;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -102,6 +167,9 @@ function AuthForm({ forPurchase }: { forPurchase?: boolean }) {
           <button type="button" className="acct-show" onClick={() => setShow(!show)}>{show ? "Hide" : "Show"}</button>
         </div>
       </label>
+      {!signup && (
+        <button type="button" className="acct-forgot" onClick={() => { setMode("reset"); setError(null); }}>Forgot password?</button>
+      )}
       {signup && (
         <label className="check acct-agree">
           <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
@@ -117,6 +185,139 @@ function AuthForm({ forPurchase }: { forPurchase?: boolean }) {
         <button type="button" onClick={() => { setMode(signup ? "signin" : "signup"); setError(null); }}>{signup ? "Sign in" : "Create one"}</button>
       </p>
     </form>
+  );
+}
+
+const RESEND_WAIT_S = 60;
+
+function VerifyBanner({ email }: { email: string }) {
+  const [busy, setBusy] = useState(false);
+  const [wait, setWait] = useState(0);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    const check = () => document.visibilityState === "visible" && void refreshVerification().catch(() => {});
+    check();
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (wait <= 0) return;
+    const id = setTimeout(() => setWait(wait - 1), 1000);
+    return () => clearTimeout(id);
+  }, [wait]);
+
+  const resend = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await resendVerification();
+      setNote("Sent. Check your inbox and spam folder.");
+      setWait(RESEND_WAIT_S);
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not send the email.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recheck = async () => {
+    setBusy(true);
+    setNote(null);
+    try {
+      if (!(await refreshVerification())) setNote("Not verified yet. Open the link in the email we sent, then try again.");
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not check right now.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="acct-verify" role="status">
+      <div>
+        <strong>Verify your email</strong>
+        <span>We sent a link to {email}. Open it to confirm this address is yours.</span>
+        {note && <em>{note}</em>}
+      </div>
+      <div className="acct-verify-actions">
+        <button type="button" className="btn outline sm" onClick={() => void resend()} disabled={busy || wait > 0}>{wait > 0 ? `Resend in ${wait}s` : "Resend email"}</button>
+        <button type="button" className="btn solid sm" onClick={() => void recheck()} disabled={busy}>I have verified</button>
+      </div>
+    </div>
+  );
+}
+
+function SecurityCard({ email }: { email: string }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    if (next.length < 8) return setMsg({ ok: false, text: "Use a new password of at least 8 characters." });
+    if (next !== again) return setMsg({ ok: false, text: "The new passwords do not match." });
+    if (next === current) return setMsg({ ok: false, text: "Choose a password different from the current one." });
+    setBusy(true);
+    setMsg(null);
+    try {
+      await changePassword(current, next);
+      setCurrent("");
+      setNext("");
+      setAgain("");
+      setMsg({ ok: true, text: "Password changed. Use the new one next time you sign in." });
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Could not change the password." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await sendPasswordReset(email);
+      setMsg({ ok: true, text: `Reset link sent to ${email}.` });
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : "Could not send the email." });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="co-card">
+      <header className="pane-head"><span>Security</span><span className="muted">Password</span></header>
+      <form className="pane-body acct-security" onSubmit={save}>
+        <label className="co-field">
+          <span>Current password</span>
+          <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+        </label>
+        <div className="acct-security-row">
+          <label className="co-field">
+            <span>New password</span>
+            <input type="password" autoComplete="new-password" placeholder="At least 8 characters" value={next} onChange={(e) => setNext(e.target.value)} />
+          </label>
+          <label className="co-field">
+            <span>Repeat new password</span>
+            <input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
+          </label>
+        </div>
+        {msg && <span className={msg.ok ? "acct-ok" : "co-err"}>{msg.text}</span>}
+        <div className="acct-security-actions">
+          <button className="btn solid" disabled={busy || !current || !next || !again}>{busy ? "Saving…" : "Change password"}</button>
+          <button type="button" className="btn ghost" onClick={() => void reset()} disabled={busy}>Forgot it? Email me a reset link</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -142,9 +343,11 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
 
   const remove = async () => {
     if (!confirm("Delete your account and everything saved in it, including API keys and their sessions? Sessions on this device stay here. This cannot be undone.")) return;
+    const password = prompt("Enter your password to confirm.");
+    if (!password) return;
     setBusy(true);
     try {
-      await deleteAccount();
+      await deleteAccount(password);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Could not delete the account.");
     } finally {
@@ -164,6 +367,8 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
           <i />{syncLabel}
         </button>
       </header>
+
+      {!account.emailVerified && <VerifyBanner email={account.email} />}
 
       <div className="acct-stats">
         <div><small>Saved sessions</small><b>{history.length}</b></div>
@@ -218,6 +423,8 @@ function Dashboard({ onTest, onBuy }: AccountPageProps) {
       )}
 
       <ApiKeysCard />
+
+      <SecurityCard email={account.email} />
 
       <footer className="acct-foot">
         <button className="btn ghost" onClick={() => void signOut()}>Sign out</button>

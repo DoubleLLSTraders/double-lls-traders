@@ -15,6 +15,7 @@ import {
   startMpesa,
   type PaidOrder,
   type PayConfig,
+  type ReviewOrder,
 } from "./siteClient";
 
 type PayMethod = "card" | "paypal" | "mpesa";
@@ -88,6 +89,7 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
   const [mpesaName, setMpesaName] = useState("");
   const [mpesaWaiting, setMpesaWaiting] = useState<{ reference: string; amountKes: number } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [review, setReview] = useState<ReviewOrder | null>(null);
 
   const plan = PLANS.find((p) => p.id === planId)!;
   const q = useMemo(() => quote(planId, coupon)!, [planId, coupon]);
@@ -338,7 +340,9 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
                         return id;
                       }}
                       onApprove={async (orderId) => {
-                        finish(await capturePayPalOrder(orderId), method);
+                        const r = await capturePayPalOrder(orderId);
+                        if (r.status === "pending") setReview(r);
+                        else finish(r, method);
                       }}
                       onError={(message) => setPayError(message)}
                     />
@@ -348,6 +352,13 @@ export function Checkout({ settings, onSettings, onBack }: CheckoutProps) {
                 </div>
               )}
               {payError && <p className="co-err co-pay-err">{payError}</p>}
+              {review && (
+                <div className="co-review" role="status">
+                  <strong>Payment received, waiting on PayPal</strong>
+                  <p>{review.message}</p>
+                  <span>Order {review.orderId} · <a href="#/account">Your account</a> shows the licence once it's issued.</span>
+                </div>
+              )}
             </section>
           </div>
 

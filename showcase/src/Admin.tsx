@@ -34,6 +34,7 @@ interface Review { id: string; at: number; visitorId: string; rating: number; te
 interface Purchase {
   orderId: string; at: number; licence: string; plan: string; email: string; name: string; method: string; coupon: string;
   licencePrice: number; setupFee: number; total: number; version: string; paid?: number; currency?: string; paymentRef?: string; phone?: string;
+  refunded?: { at: number; reason: string };
 }
 
 const METHOD_NAMES: Record<string, string> = { card: "Card", paypal: "PayPal", mpesa: "M-Pesa" };
@@ -375,7 +376,7 @@ export default function Admin() {
                         <td>{METHOD_NAMES[p.method] ?? p.method}{(p.paymentRef || p.phone) && <span className="mono">{p.paymentRef}{p.phone ? ` · ${p.phone}` : ""}</span>}</td>
                         <td className="num">{usd(p.licencePrice)}</td>
                         <td className="num">{usd(p.setupFee)}</td>
-                        <td className="num">{usd(p.total)}</td>
+                        <td className="num">{p.refunded ? <s title={`${p.refunded.reason} ${new Date(p.refunded.at).toLocaleDateString()}`}>{usd(p.total)}</s> : usd(p.total)}{p.refunded && <span className="mono down">{p.refunded.reason}</span>}</td>
                         <td className="num up">{paidLabel(p)}</td>
                         <td>v{p.version}</td>
                       </tr>

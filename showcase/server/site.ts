@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { KES_PER_USD, quote, type PlanId } from "../src/pricing";
-import { accountFromRequest, linkLicence } from "./accounts";
+import { accountFromRequest, linkLicence, unlinkLicence } from "./accounts";
 import type { Kv } from "./kv";
 import {
   capturePayPalOrder,
@@ -10,7 +10,9 @@ import {
   paypalConfig,
   startStkPush,
   stkStatus,
+  verifyPayPalWebhook,
   type PaymentEnv,
+  type PayPalWebhookEvent,
 } from "./payments";
 
 const LIVE_MS = 15_000;
@@ -89,6 +91,8 @@ interface Purchase {
   phone?: string;
   /** Customer account that paid. */
   accountId?: string;
+  /** Set when PayPal reports the payment refunded or reversed; the licence stops working. */
+  refunded?: { at: number; reason: "refunded" | "reversed" };
 }
 
 /** A checkout that has been sent to PayPal or M-Pesa but not confirmed yet. */
@@ -106,7 +110,11 @@ interface PendingOrder {
   totalKes: number;
   accountId?: string;
   accountKey?: string;
+  /** PayPal is holding the payment for review; kept until the webhook settles it. */
+  review?: boolean;
 }
+
+const REVIEW_KEEP_MS = 30 * 86_400_000;
 
 interface Install {
   licence: string;
@@ -316,7 +324,7 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
         testers: visitors.filter((v) => v.testClicks > 0).length,
         testClicks: visitors.reduce((a, v) => a + v.testClicks, 0),
         purchases: purchases.length,
-        revenue: purchases.reduce((a, p) => a + p.total, 0),
+        revenue: purchases.reduce((a, p) => a + (p.refunded ? 0 : p.total), 0),
         reviews: shown.length,
         rating: shown.length ? shown.reduce((a, r) => a + r.rating, 0) / shown.length : 0,
         installs: installs.length,
@@ -362,9 +370,30 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
   const savePending = (key: string, order: PendingOrder) =>
     kv.update<Record<string, PendingOrder>>(K.pending, () => ({}), (all) => {
       const now = Date.now();
-      for (const [k, p] of Object.entries(all)) if (now - p.at > DAY_MS) delete all[k];
+      for (const [k, p] of Object.entries(all)) if (now - p.at > (p.review ? REVIEW_KEEP_MS : DAY_MS)) delete all[k];
       all[key] = order;
     });
+  const markReview = (key: string) =>
+    kv.update<Record<string, PendingOrder>>(K.pending, () => ({}), (all) => {
+      if (all[key]) all[key].review = true;
+    });
+
+  /** Turns off the licence behind a refunded or reversed PayPal payment. */
+  const revoke = async (captureId: string, orderId: string, reason: "refunded" | "reversed") => {
+    let hit: Purchase | null = null;
+    await kv.update<Purchase[]>(K.purchases, () => [], (all) => {
+      const p = all.find((x) => (captureId && x.paymentRef === captureId) || (orderId && x.providerKey === orderId));
+      if (!p || p.refunded) return;
+      p.refunded = { at: Date.now(), reason };
+      hit = p;
+    });
+    const p = hit as Purchase | null;
+    if (p) {
+      await unlinkLicence(kv, p.email, p.licence);
+      await record(p.visitorId, "purchase", `${reason} · ${p.licence}`);
+    }
+    return p;
+  };
   const getPending = async (key: string) => ((await kv.get<Record<string, PendingOrder>>(K.pending)) ?? {})[key] ?? null;
   const dropPending = (key: string) =>
     kv.update<Record<string, PendingOrder>>(K.pending, () => ({}), (all) => {
@@ -524,7 +553,9 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
             all[key] = { licence, format, version: have, firstSeen: prev?.firstSeen ?? now, lastSeen: now, runs: (prev?.runs ?? 0) + 1 };
           });
         }
+        const bought = licence ? ((await kv.get<Purchase[]>(K.purchases)) ?? []).find((p) => p.licence === licence) : undefined;
         return json(200, {
+          ...(licence ? { licenceActive: !!bought && !bought.refunded } : {}),
           latest: release.version,
           notes: release.notes,
           released: release.at,
@@ -560,6 +591,32 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
         const pending = (await kv.get<Record<string, PendingOrder>>(K.pending)) ?? {};
         const ref = Object.keys(pending).find((k) => k === String(r.reference ?? "") || pending[k].orderId === ext);
         if (ref) await checkMpesa(ref).catch(() => {});
+        return json(200, { ok: true });
+      }
+
+      // PayPal webhook: settles payments held for review and turns off licences for refunds and reversals.
+      // Only acted on once PayPal confirms the signature.
+      if (path === "/api/pay/paypal/webhook" && req.method === "POST") {
+        if (!payEnv.PAYPAL_WEBHOOK_ID) return json(503, { error: "PAYPAL_WEBHOOK_ID is not set." });
+        const event = (await readJson(req)) as PayPalWebhookEvent;
+        if (!(await verifyPayPalWebhook(payEnv, req.headers, event))) return json(400, { error: "Signature check failed." });
+        const r = event.resource ?? {};
+        const orderId = r.supplementary_data?.related_ids?.order_id ?? "";
+        const upCapture = (r.links ?? []).find((l) => l.rel === "up" && /\/captures\//.test(l.href ?? ""))?.href?.split("/").pop() ?? "";
+
+        if (event.event_type === "PAYMENT.CAPTURE.COMPLETED" && orderId && !(await paidFor(orderId))) {
+          const order = await getPending(orderId);
+          const amount = Number(r.amount?.value ?? 0);
+          if (order && r.amount?.currency_code === "USD" && amount + 0.01 >= order.total) {
+            await fulfil(orderId, order, { paid: amount, currency: "USD", paymentRef: r.id ?? "" });
+          }
+        } else if (event.event_type === "PAYMENT.CAPTURE.DENIED" && orderId) {
+          await dropPending(orderId);
+        } else if (event.event_type === "PAYMENT.CAPTURE.REFUNDED") {
+          await revoke(upCapture, orderId, "refunded");
+        } else if (event.event_type === "PAYMENT.CAPTURE.REVERSED") {
+          await revoke(r.id ?? "", orderId, "reversed");
+        }
         return json(200, { ok: true });
       }
 
@@ -665,6 +722,14 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
         const order = await getPending(ppId);
         if (!order) return json(404, { error: "Unknown order." });
         const cap = await capturePayPalOrder(payEnv, ppId);
+        if (cap.pending) {
+          await markReview(ppId);
+          return json(202, {
+            status: "pending",
+            orderId: order.orderId,
+            message: "PayPal is reviewing this payment. Your licence is added to your account automatically as soon as it clears, usually within a day.",
+          });
+        }
         if (!cap.paid) return json(402, { error: "PayPal did not complete the payment." });
         if (cap.currency !== "USD" || cap.amount + 0.01 < order.total) {
           return json(402, { error: `PayPal shows ${cap.currency} ${cap.amount}, but this costs $${order.total.toFixed(2)}.` });
@@ -693,6 +758,7 @@ export function createSiteApi(env: Record<string, string | undefined>, kv: Kv): 
         const email = str(body.email, 120).toLowerCase();
         const p = ((await kv.get<Purchase[]>(K.purchases)) ?? []).find((x) => x.licence === licence && x.email === email);
         if (!p) return json(404, { error: "No licence matches that key and email." });
+        if (p.refunded) return json(403, { error: `This licence was ${p.refunded.reason} and is no longer active.` });
         await record(visitorId, "licence_open", p.licence);
         return json(200, { licence: p.licence, plan: p.plan, email: p.email, version: p.version });
       }

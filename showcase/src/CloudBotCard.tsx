@@ -5,7 +5,7 @@ import { symbolName, symbolShort } from "./market";
 import { loadSettings } from "./sessionStore";
 import { useLicence } from "./siteClient";
 
-const POLL_MS = 10_000;
+const POLL_MS = 30_000;
 /** No status write for this long means the worker is not running the bot. */
 const STALE_MS = 3 * 60_000;
 const TOKEN_URL = "https://home.deriv.com/";
@@ -63,6 +63,8 @@ export function CloudBotCard({ onBuy }: { onBuy: () => void }) {
   const winRate = status?.trades ? (status.wins / status.trades) * 100 : 0;
   const currency = status?.currency ?? "USD";
   const start = () => act(() => saveCloudBot({ enabled: true, derivToken: token.trim() || undefined, settings, allowReal }));
+
+  if (unavailable) return null;
 
   return (
     <div className="co-card cloud-card">

@@ -14,6 +14,7 @@ export interface Account {
   email: string;
   name: string;
   createdAt: number;
+  emailVerified?: boolean;
 }
 
 export interface AccountLicence {
@@ -26,7 +27,7 @@ export interface AccountLicence {
 
 interface AccountData {
   token?: string;
-  account: { email: string; name: string; createdAt: number };
+  account: { email: string; name: string; createdAt: number; emailVerified?: boolean };
   settings: Partial<BotSettings> | null;
   settingsAt: number;
   licences: AccountLicence[];
@@ -140,25 +141,107 @@ function applyRemote(data: AccountData) {
 }
 
 async function signedIn(data: AccountData) {
-  setAccount({ token: data.token!, email: data.account.email, name: data.account.name, createdAt: data.account.createdAt });
+  setAccount({
+    token: data.token!,
+    email: data.account.email,
+    name: data.account.name,
+    createdAt: data.account.createdAt,
+    emailVerified: data.account.emailVerified === true,
+  });
   applyRemote(data);
 }
 
+const firebase = () => import("./firebase");
+
+/** Runs a Firebase step and rethrows its error as a plain sentence. */
+async function fb<T>(step: (m: typeof import("./firebase")) => Promise<T>): Promise<T> {
+  const m = await firebase();
+  try {
+    return await step(m);
+  } catch (err) {
+    throw Object.assign(new Error(m.friendly(err)), { code: m.authCode(err) });
+  }
+}
+
+const exchange = (idToken: string, extra: { name?: string; acceptTerms?: boolean } = {}) =>
+  request<AccountData>("POST", "/firebase", { idToken, ...extra }, undefined);
+
+/** Creates the Firebase user (which emails a verification link), then the site account. */
 export async function signUp(input: { email: string; password: string; name: string; acceptTerms: boolean }) {
-  await signedIn(await request<AccountData>("POST", "/signup", input, undefined));
+  const idToken = await fb((m) => m.firebaseAdopt(input.email, input.password));
+  await signedIn(await exchange(idToken, { name: input.name, acceptTerms: input.acceptTerms }));
 }
 
 export async function signIn(email: string, password: string) {
-  await signedIn(await request<AccountData>("POST", "/login", { email, password }, undefined));
+  let idToken: string;
+  try {
+    idToken = await fb((m) => m.firebaseSignIn(email, password));
+  } catch (err) {
+    if (!["auth/invalid-credential", "auth/user-not-found", "auth/wrong-password"].includes((err as { code?: string }).code ?? "")) throw err;
+    // Accounts made before Firebase sign-in still have the old site password: check it, then move them over.
+    const legacy = await request<AccountData>("POST", "/login", { email, password }, undefined);
+    try {
+      idToken = await fb((m) => m.firebaseAdopt(email, password));
+    } catch {
+      await signedIn(legacy);
+      return;
+    }
+  }
+  await signedIn(await exchange(idToken));
 }
 
 export async function signOut() {
   await request("POST", "/logout").catch(() => {});
+  await (await firebase()).firebaseSignOut();
   setAccount(null);
   setStatus("idle");
 }
 
-export async function deleteAccount() {
+/** Emails a password reset link. Says nothing about whether the email has an account. */
+export const sendPasswordReset = (email: string) => fb((m) => m.sendReset(email.trim()));
+
+export const resendVerification = () => fb((m) => m.resendVerification());
+
+/** Re-reads the email-verified flag from Firebase and stores it on the account. */
+export async function refreshVerification() {
+  const account = loadAccount();
+  if (!account) return false;
+  const fresh = await fb((m) => m.freshIdToken());
+  if (!fresh) return account.emailVerified === true;
+  const data = await request<AccountData>("PUT", "/verification", { idToken: fresh.token });
+  setAccount({ ...account, emailVerified: data.account.emailVerified === true });
+  return data.account.emailVerified === true;
+}
+
+export async function changePassword(current: string, next: string) {
+  const account = loadAccount();
+  if (!account) throw new Error("Please sign in again.");
+  try {
+    await fb((m) => m.changePassword(account.email, current, next));
+  } catch (err) {
+    if (!["auth/invalid-credential", "auth/user-not-found"].includes((err as { code?: string }).code ?? "")) throw err;
+    // Not moved to Firebase yet: the old site password must match before the account is moved with the new one.
+    await request("POST", "/login", { email: account.email, password: current }, undefined);
+    const idToken = await fb(async (m) => {
+      await m.firebaseAdopt(account.email, current);
+      await m.changePassword(account.email, current, next);
+      return (await m.freshIdToken())?.token ?? "";
+    });
+    if (idToken) await request("PUT", "/verification", { idToken });
+  }
+}
+
+export async function deleteAccount(password: string) {
+  const account = loadAccount();
+  if (account) {
+    try {
+      await fb((m) => m.firebaseDelete(account.email, password));
+    } catch (err) {
+      if (!["auth/invalid-credential", "auth/user-not-found"].includes((err as { code?: string }).code ?? "")) throw err;
+      // No Firebase user yet: the old site password has to match instead.
+      await request("POST", "/login", { email: account.email, password }, undefined);
+    }
+  }
   await request("DELETE", "/");
   write(SYNC_KEY, null);
   write(API_KEY_STORE, null);

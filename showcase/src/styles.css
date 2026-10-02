@@ -1572,6 +1572,22 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
 .acct-licence { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .acct-licence code { font-family: var(--mono); font-size: 15px; letter-spacing: 0.06em; color: var(--text); }
 .acct-foot { display: flex; justify-content: space-between; padding: 4px 0 20px; }
+.acct-forgot { align-self: flex-end; margin: -6px 0 12px auto; display: block; font-size: 12.5px; color: var(--text-3); }
+.acct-forgot:hover { color: var(--text); }
+.acct-verify {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 18px; border-radius: 14px;
+  background: rgba(224, 178, 92, 0.07); border: 1px solid rgba(224, 178, 92, 0.28);
+}
+.acct-verify > div:first-child { display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); min-width: 0; }
+.acct-verify strong { color: var(--text); font-weight: 500; font-size: 14px; }
+.acct-verify em { font-style: normal; color: var(--amber); font-size: 12.5px; }
+.acct-verify-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.acct-security { display: grid; gap: 12px; }
+.acct-security .co-field { margin: 0; }
+.acct-security-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.acct-security-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.acct-ok { color: var(--up); font-size: 13px; }
+@media (max-width: 640px) { .acct-security-row { grid-template-columns: 1fr; } }
 .cloud-card .pane-body { display: grid; gap: 14px; }
 .cloud-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-2); }
 .cloud-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
@@ -1703,3 +1719,8 @@ button, a, input { -webkit-tap-highlight-color: transparent; }
   .doc-endpoint-body { padding-left: 14px; }
   .docs .co-nav { margin: 0 -18px; padding: 0 18px; }
 }
+.co-review { margin-top: 14px; padding: 16px 18px; border-radius: 12px; border: 1px solid rgba(224, 178, 92, 0.35); background: rgba(224, 178, 92, 0.07); display: grid; gap: 6px; }
+.co-review strong { font-weight: 500; color: var(--amber); }
+.co-review p { font-size: 14px; color: var(--text-2); line-height: 1.55; }
+.co-review span { font-size: 12.5px; color: var(--text-3); }
+.co-review a { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }

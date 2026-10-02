@@ -65,8 +65,10 @@ if (phase === "all") {
   check("purchase needs sign-in (PayPal)", anonPay.status === 401, anonPay.data?.error);
   check("purchase needs sign-in (M-Pesa)", (await pay("mpesa/start", "")).status === 401);
   check("fake token can't purchase", (await pay("paypal/create", "acc_fake")).status === 401);
-  const signedPay = await pay("paypal/create", token);
-  check("signed-in buyer passes the gate", signedPay.status !== 401, `${signedPay.status} ${signedPay.data?.error ?? "order created"}`);
+  if (!process.env.SKIP_PAY) {
+    const signedPay = await pay("paypal/create", token);
+    check("signed-in buyer passes the gate", signedPay.status !== 401, `${signedPay.status} ${signedPay.data?.error ?? "order created"}`);
+  }
 
   token = "";
   const login = await api("POST", "/login", { email: email.toUpperCase(), password });
